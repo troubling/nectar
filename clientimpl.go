@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
-	"github.com/troubling/nectar/nectarutil"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/troubling/nectar/nectarutil"
 )
 
 // userClient is a Client to be used by end-users.  It knows how to authenticate with auth v1 and v2.
@@ -29,6 +30,9 @@ func NewClient(tenant string, username string, password string, apikey string, r
 			Timeout: 30 * time.Minute,
 			Transport: &http.Transport{
 				MaxIdleConnsPerHost: 300,
+				MaxIdleConns:        0,
+				IdleConnTimeout:     5 * time.Second,
+				DisableCompression:  true,
 			},
 		},
 		tenant:   tenant,
@@ -55,7 +59,11 @@ func NewInsecureClient(tenant string, username string, password string, apikey s
 		client: &http.Client{
 			Timeout: 30 * time.Minute,
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+				MaxIdleConnsPerHost: 300,
+				MaxIdleConns:        0,
+				IdleConnTimeout:     5 * time.Second,
+				DisableCompression:  true,
 			},
 		},
 		tenant:   tenant,
