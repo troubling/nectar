@@ -3,10 +3,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/csv"
 	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gholt/brimtext"
 	"github.com/troubling/nectar"
@@ -32,6 +35,15 @@ var (
 	globalFlagConcurrency     *int               // defined in init()
 	globalFlagInternalStorage *bool              // defined in init()
 	globalFlagHeaders         = stringListFlag{} // defined in init()
+)
+
+var (
+	benchPutFlags          = flag.NewFlagSet("bench-put", flag.ContinueOnError)
+	benchPutFlagContainers = benchPutFlags.Int("containers", 1, "Number of containers to use.")
+	benchPutFlagCount      = benchPutFlags.Int("count", 1000, "Number of objects to PUT, distributed across containers.")
+	benchPutFlagCSV        = benchPutFlags.String("csv", "", "Store the timing of each PUT into a CSV file.")
+	benchPutFlagCSVOT      = benchPutFlags.String("csvot", "", "Store the number of PUTs performed over time into a CSV file.")
+	benchPutFlagSize       = benchPutFlags.Int("size", 4096, "Number of bytes for each object.")
 )
 
 var (
@@ -64,6 +76,7 @@ func init() {
 	globalFlags.Var(&globalFlagHeaders, "H", "|<name>:[value]| Sets a header to be sent with the request. Useful mostly for PUTs and POSTs, allowing you to set metadata. This option can be specified multiple times for additional headers.")
 	var flagbuf bytes.Buffer
 	globalFlags.SetOutput(&flagbuf)
+	benchPutFlags.SetOutput(&flagbuf)
 	downloadFlags.SetOutput(&flagbuf)
 	getFlags.SetOutput(&flagbuf)
 	headFlags.SetOutput(&flagbuf)
@@ -79,6 +92,11 @@ Tool for accessing a Hummingbird/Swift cluster. Some global options can also be 
 		fmt.Println()
 		fmt.Println(brimtext.Wrap(`
 The following subcommands are available:`, 0, "", ""))
+		fmt.Println("\nbench-put [options] <container> [object]")
+		fmt.Println(brimtext.Wrap(`
+Benchmark tests PUTs. By default, 1000 PUTs are done into the named <container>. If you specify [object] it will be used as a prefix for the object names, otherwise "bench-" will be used.
+        `, 0, "  ", "  "))
+		helpFlags(benchPutFlags)
 		fmt.Println("\ndelete [container] [object]")
 		fmt.Println(brimtext.Wrap(`
 Performs a DELETE request. A DELETE, as probably expected, is used to remove the target.
@@ -181,6 +199,8 @@ func main() {
 		args = args[1:]
 	}
 	switch cmd {
+	case "bench-put":
+		benchPut(c, args)
 	case "delete":
 		delet(c, args)
 	case "download":
@@ -197,6 +217,190 @@ func main() {
 		upload(c, args)
 	default:
 		fatalf("Unknown command: %s\n", cmd)
+	}
+}
+
+func benchPut(c nectar.Client, args []string) {
+	if err := benchPutFlags.Parse(args); err != nil {
+		fatal(err)
+	}
+	container, object := parsePath(benchPutFlags.Args())
+	if container == "" {
+		fatalf("bench-put requires <container>\n")
+	}
+	if object == "" {
+		object = "bench-"
+	}
+	containers := *benchPutFlagContainers
+	if containers < 1 {
+		containers = 1
+	}
+	count := *benchPutFlagCount
+	if count < 1 {
+		count = 1000
+	}
+	size := int64(*benchPutFlagSize)
+	if size < 0 {
+		size = 4096
+	}
+	var csvw *csv.Writer
+	var csvlk sync.Mutex
+	if *benchPutFlagCSV != "" {
+		csvf, err := os.Create(*benchPutFlagCSV)
+		if err != nil {
+			fatal(err)
+		}
+		csvw = csv.NewWriter(csvf)
+		defer func() {
+			csvw.Flush()
+			csvf.Close()
+		}()
+		csvw.Write([]string{"completion_time_unix_nano", "object_name", "transaction_id", "status", "elapsed_nanoseconds"})
+	}
+	var csvotw *csv.Writer
+	if *benchPutFlagCSVOT != "" {
+		csvotf, err := os.Create(*benchPutFlagCSVOT)
+		if err != nil {
+			fatal(err)
+		}
+		csvotw = csv.NewWriter(csvotf)
+		defer func() {
+			csvotw.Flush()
+			csvotf.Close()
+		}()
+		csvotw.Write([]string{"time_unix_nano", "count_since_last_time"})
+		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0"})
+	}
+	if containers == 1 {
+		fmt.Printf("Ensuring container exists...")
+		verbosef("PUT %s\n", container)
+		resp := c.PutContainer(container, globalFlagHeaders.Headers())
+		if resp.StatusCode/100 != 2 {
+			bodyBytes, _ := ioutil.ReadAll(resp.Body)
+			resp.Body.Close()
+			if *globalFlagContinueOnError {
+				fmt.Fprintf(os.Stderr, "PUT %s - %d %s - %s\n", container, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+			} else {
+				fatalf("PUT %s - %d %s - %s\n", container, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+			}
+		}
+		resp.Body.Close()
+	} else {
+		fmt.Printf("Ensuring %d containers exist...", containers)
+		for x := 0; x < containers; x++ {
+			putContainer := fmt.Sprintf("%s%d", container, x)
+			verbosef("PUT %s\n", putContainer)
+			resp := c.PutContainer(putContainer, globalFlagHeaders.Headers())
+			if resp.StatusCode/100 != 2 {
+				bodyBytes, _ := ioutil.ReadAll(resp.Body)
+				resp.Body.Close()
+				if *globalFlagContinueOnError {
+					fmt.Fprintf(os.Stderr, "PUT %s - %d %s - %s\n", putContainer, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+					continue
+				} else {
+					fatalf("PUT %s - %d %s - %s\n", putContainer, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+				}
+			}
+			resp.Body.Close()
+		}
+	}
+	fmt.Println()
+	concurrency := *globalFlagConcurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	benchChan := make(chan int, concurrency)
+	wg := sync.WaitGroup{}
+	wg.Add(concurrency)
+	for x := 0; x < concurrency; x++ {
+		go func() {
+			rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+			var start time.Time
+			for {
+				i := <-benchChan
+				if i == 0 {
+					break
+				}
+				i--
+				putContainer := container
+				if containers > 1 {
+					putContainer = fmt.Sprintf("%s%d", putContainer, i%containers)
+				}
+				putObject := fmt.Sprintf("%s%d", object, i)
+				verbosef("PUT %s/%s\n", putContainer, putObject)
+				if csvw != nil {
+					start = time.Now()
+				}
+				resp := c.PutObject(putContainer, putObject, globalFlagHeaders.Headers(), &io.LimitedReader{R: rnd, N: size})
+				if csvw != nil {
+					stop := time.Now()
+					elapsed := stop.Sub(start).Nanoseconds()
+					csvlk.Lock()
+					csvw.Write([]string{
+						fmt.Sprintf("%d", stop.UnixNano()),
+						putContainer + "/" + putObject,
+						resp.Header.Get("X-Trans-Id"),
+						fmt.Sprintf("%d", resp.StatusCode),
+						fmt.Sprintf("%d", elapsed),
+					})
+					csvlk.Unlock()
+				}
+				if resp.StatusCode/100 != 2 {
+					bodyBytes, _ := ioutil.ReadAll(resp.Body)
+					resp.Body.Close()
+					if *globalFlagContinueOnError {
+						fmt.Fprintf(os.Stderr, "PUT %s/%s - %d %s - %s\n", putContainer, putObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+						continue
+					} else {
+						fatalf("PUT %s/%s - %d %s - %s\n", putContainer, putObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+					}
+				}
+				resp.Body.Close()
+			}
+			wg.Done()
+		}()
+	}
+	if containers == 1 {
+		fmt.Printf("Bench-PUT of %d objects, each %d bytes, into 1 container, at %d concurrency...", count, size, concurrency)
+	} else {
+		fmt.Printf("Bench-PUT of %d objects, each %d bytes, distributed across %d containers, at %d concurrency...", count, size, containers, concurrency)
+	}
+	ticker := time.NewTicker(time.Minute)
+	start := time.Now()
+	lastSoFar := 0
+	for i := 1; i <= count; i++ {
+		waiting := true
+		for waiting {
+			select {
+			case <-ticker.C:
+				soFar := i - concurrency
+				now := time.Now()
+				elapsed := now.Sub(start)
+				fmt.Printf("\n%.05fs for %d PUTs so far, %.05fs per PUT, or %.05f PUTs per second...", float64(elapsed)/float64(time.Second), soFar, float64(elapsed)/float64(time.Second)/float64(soFar), float64(soFar)/float64(elapsed/time.Second))
+				if csvotw != nil {
+					csvotw.Write([]string{
+						fmt.Sprintf("%d", now.UnixNano()),
+						fmt.Sprintf("%d", soFar-lastSoFar),
+					})
+					lastSoFar = soFar
+				}
+			case benchChan <- i:
+				waiting = false
+			}
+		}
+	}
+	close(benchChan)
+	wg.Wait()
+	stop := time.Now()
+	elapsed := stop.Sub(start)
+	ticker.Stop()
+	fmt.Println()
+	fmt.Printf("%.05fs total time, %.05fs per PUT, or %.05f PUTs per second.\n", float64(elapsed)/float64(time.Second), float64(elapsed)/float64(time.Second)/float64(count), float64(count)/float64(elapsed/time.Second))
+	if csvotw != nil {
+		csvotw.Write([]string{
+			fmt.Sprintf("%d", stop.UnixNano()),
+			fmt.Sprintf("%d", count-lastSoFar),
+		})
 	}
 }
 
