@@ -64,8 +64,7 @@ var (
 )
 
 var (
-	headFlags   = flag.NewFlagSet("head", flag.ContinueOnError)
-	headFlagRaw = headFlags.Bool("r", false, "Emit raw headers")
+	headFlags = flag.NewFlagSet("head", flag.ContinueOnError)
 )
 
 func init() {
@@ -517,23 +516,12 @@ func head(c nectar.Client, args []string) {
 		fatal(err)
 	}
 	container, object := parsePath(headFlags.Args())
-	var kstrip string
-	var translateHeaders map[string]string
 	var resp *http.Response
 	if object != "" {
-		kstrip = "X-Object-"
 		resp = c.HeadObject(container, object, globalFlagHeaders.Headers())
-		translateHeaders = map[string]string{
-			"Content-Length": "Bytes Used",
-			"Content-Type":   "Content Type",
-			"Etag":           "ETag",
-			"Last-Modified":  "Last Modified",
-		}
 	} else if container != "" {
-		kstrip = "X-Container-"
 		resp = c.HeadContainer(container, globalFlagHeaders.Headers())
 	} else {
-		kstrip = "X-Account-"
 		resp = c.HeadAccount(globalFlagHeaders.Headers())
 	}
 	bodyBytes, _ := ioutil.ReadAll(resp.Body)
@@ -545,36 +533,17 @@ func head(c nectar.Client, args []string) {
 	ks := []string{}
 	kls := map[string]string{}
 	for k := range resp.Header {
-		if *headFlagRaw {
-			ks = append(ks, k)
-			kls[k] = k
-		} else if strings.HasPrefix(k, kstrip) {
-			nk := strings.Replace(k[len(kstrip):], "-", " ", -1)
-			ks = append(ks, nk)
-			kls[nk] = k
-		} else if translateHeaders[k] != "" {
-			ks = append(ks, translateHeaders[k])
-			kls[translateHeaders[k]] = k
-		}
+		ks = append(ks, k)
+		kls[k] = k
 	}
 	sort.Strings(ks)
 	for _, k := range ks {
 		for _, v := range resp.Header[kls[k]] {
-			if *headFlagRaw {
-				data = append(data, []string{k + ":", v})
-			} else {
-				data = append(data, []string{v, k})
-			}
+			data = append(data, []string{k + ":", v})
 		}
 	}
-	if *headFlagRaw {
-		fmt.Println(resp.StatusCode, http.StatusText(resp.StatusCode))
-	}
-	opts := brimtext.NewDefaultAlignOptions()
-	if !*headFlagRaw {
-		opts.Alignments = []brimtext.Alignment{brimtext.Right, brimtext.Left}
-	}
-	fmt.Print(brimtext.Align(data, opts))
+	fmt.Println(resp.StatusCode, http.StatusText(resp.StatusCode))
+	fmt.Print(brimtext.Align(data, brimtext.NewDefaultAlignOptions()))
 }
 
 func put(c nectar.Client, args []string) {
