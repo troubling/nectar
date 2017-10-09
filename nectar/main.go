@@ -39,6 +39,14 @@ var (
 )
 
 var (
+	benchDeleteFlags          = flag.NewFlagSet("bench-delete", flag.ContinueOnError)
+	benchDeleteFlagContainers = benchDeleteFlags.Int("containers", 1, "|<number>| Number of containers in use.")
+	benchDeleteFlagCount      = benchDeleteFlags.Int("count", 1000, "|<number>| Number of objects to delete, distributed across containers.")
+	benchDeleteFlagCSV        = benchDeleteFlags.String("csv", "", "|<filename>| Store the timing of each delete into a CSV file.")
+	benchDeleteFlagCSVOT      = benchDeleteFlags.String("csvot", "", "|<filename>| Store the number of deletes performed over time into a CSV file.")
+)
+
+var (
 	benchGetFlags          = flag.NewFlagSet("bench-get", flag.ContinueOnError)
 	benchGetFlagContainers = benchGetFlags.Int("containers", 1, "|<number>| Number of containers to use.")
 	benchGetFlagCount      = benchGetFlags.Int("count", 1000, "|<number>| Number of objects to get, distributed across containers.")
@@ -112,6 +120,7 @@ func init() {
 	globalFlags.Var(&globalFlagHeaders, "H", "|<name>:[value]| Sets a header to be sent with the request. Useful mostly for PUTs and POSTs, allowing you to set metadata. This option can be specified multiple times for additional headers.")
 	var flagbuf bytes.Buffer
 	globalFlags.SetOutput(&flagbuf)
+	benchDeleteFlags.SetOutput(&flagbuf)
 	benchGetFlags.SetOutput(&flagbuf)
 	benchHeadFlags.SetOutput(&flagbuf)
 	benchMixedFlags.SetOutput(&flagbuf)
@@ -132,6 +141,11 @@ Tool for accessing a Hummingbird/Swift cluster. Some global options can also be 
 		fmt.Println()
 		fmt.Println(brimtext.Wrap(`
 The following subcommands are available:`, 0, "", ""))
+		fmt.Println("\nbench-delete [options] <container> [object]")
+		fmt.Println(brimtext.Wrap(`
+Benchmark tests DELETEs. By default, 1000 DELETEs are done against the named <container>. If you specify [object] it will be used as a prefix for the object names, otherwise "bench-" will be used. Generally, you would use bench-put to populate the containers and objects, and then use bench-delete with the same options to test the deletions.
+        `, 0, "  ", "  "))
+		helpFlags(benchDeleteFlags)
 		fmt.Println("\nbench-get [options] <container> [object]")
 		fmt.Println(brimtext.Wrap(`
 Benchmark tests GETs. By default, 1000 GETs are done from the named <container>. If you specify [object] it will be used as the prefix for the object names, otherwise "bench-" will be used. Generally, you would use bench-put to populate the containers and objects, and then use bench-get with the same options with the possible addition of -iterations to lengthen the test time.
@@ -259,6 +273,8 @@ func main() {
 		args = args[1:]
 	}
 	switch cmd {
+	case "bench-delete":
+		benchDelete(c, args)
 	case "bench-get":
 		benchGet(c, args)
 	case "bench-head":
@@ -285,6 +301,176 @@ func main() {
 		upload(c, args)
 	default:
 		fatalf("Unknown command: %s\n", cmd)
+	}
+}
+
+func benchDelete(c nectar.Client, args []string) {
+	if err := benchDeleteFlags.Parse(args); err != nil {
+		fatal(err)
+	}
+	container, object := parsePath(benchDeleteFlags.Args())
+	if container == "" {
+		fatalf("bench-delete requires <container>\n")
+	}
+	if object == "" {
+		object = "bench-"
+	}
+	containers := *benchDeleteFlagContainers
+	if containers < 1 {
+		containers = 1
+	}
+	count := *benchDeleteFlagCount
+	if count < 1 {
+		count = 1000
+	}
+	var csvw *csv.Writer
+	var csvlk sync.Mutex
+	if *benchDeleteFlagCSV != "" {
+		csvf, err := os.Create(*benchDeleteFlagCSV)
+		if err != nil {
+			fatal(err)
+		}
+		csvw = csv.NewWriter(csvf)
+		defer func() {
+			csvw.Flush()
+			csvf.Close()
+		}()
+		csvw.Write([]string{"completion_time_unix_nano", "object_name", "transaction_id", "status", "elapsed_nanoseconds"})
+	}
+	var csvotw *csv.Writer
+	if *benchDeleteFlagCSVOT != "" {
+		csvotf, err := os.Create(*benchDeleteFlagCSVOT)
+		if err != nil {
+			fatal(err)
+		}
+		csvotw = csv.NewWriter(csvotf)
+		defer func() {
+			csvotw.Flush()
+			csvotf.Close()
+		}()
+		csvotw.Write([]string{"time_unix_nano", "count_since_last_time"})
+		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0"})
+	}
+	concurrency := *globalFlagConcurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	benchChan := make(chan int, concurrency)
+	wg := sync.WaitGroup{}
+	wg.Add(concurrency)
+	for x := 0; x < concurrency; x++ {
+		go func() {
+			var start time.Time
+			for {
+				i := <-benchChan
+				if i == 0 {
+					break
+				}
+				i--
+				deleteContainer := container
+				if containers > 1 {
+					deleteContainer = fmt.Sprintf("%s%d", deleteContainer, i%containers)
+				}
+				deleteObject := fmt.Sprintf("%s%d", object, i)
+				verbosef("DELETE %s/%s\n", deleteContainer, deleteObject)
+				if csvw != nil {
+					start = time.Now()
+				}
+				resp := c.DeleteObject(deleteContainer, deleteObject, globalFlagHeaders.Headers())
+				if csvw != nil {
+					stop := time.Now()
+					elapsed := stop.Sub(start).Nanoseconds()
+					csvlk.Lock()
+					csvw.Write([]string{
+						fmt.Sprintf("%d", stop.UnixNano()),
+						deleteContainer + "/" + deleteObject,
+						resp.Header.Get("X-Trans-Id"),
+						fmt.Sprintf("%d", resp.StatusCode),
+						fmt.Sprintf("%d", elapsed),
+					})
+					csvlk.Unlock()
+				}
+				if resp.StatusCode/100 != 2 {
+					bodyBytes, _ := ioutil.ReadAll(resp.Body)
+					resp.Body.Close()
+					if *globalFlagContinueOnError {
+						fmt.Fprintf(os.Stderr, "DELETE %s/%s - %d %s - %s\n", deleteContainer, deleteObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+						continue
+					} else {
+						fatalf("DELETE %s/%s - %d %s - %s\n", deleteContainer, deleteObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+					}
+				}
+				resp.Body.Close()
+			}
+			wg.Done()
+		}()
+	}
+	if containers == 1 {
+		fmt.Printf("Bench-DELETE of %d objects from 1 container, at %d concurrency...", count, concurrency)
+	} else {
+		fmt.Printf("Bench-DELETE of %d objects, distributed across %d containers, at %d concurrency...", count, containers, concurrency)
+	}
+	ticker := time.NewTicker(time.Minute)
+	start := time.Now()
+	lastSoFar := 0
+	for i := 1; i <= count; i++ {
+		waiting := true
+		for waiting {
+			select {
+			case <-ticker.C:
+				soFar := i - concurrency
+				now := time.Now()
+				elapsed := now.Sub(start)
+				fmt.Printf("\n%.05fs for %d DELETEs so far, %.05fs per DELETE, or %.05f DELETEs per second...", float64(elapsed)/float64(time.Second), soFar, float64(elapsed)/float64(time.Second)/float64(soFar), float64(soFar)/float64(elapsed/time.Second))
+				if csvotw != nil {
+					csvotw.Write([]string{
+						fmt.Sprintf("%d", now.UnixNano()),
+						fmt.Sprintf("%d", soFar-lastSoFar),
+					})
+					lastSoFar = soFar
+				}
+			case benchChan <- i:
+				waiting = false
+			}
+		}
+	}
+	close(benchChan)
+	wg.Wait()
+	stop := time.Now()
+	elapsed := stop.Sub(start)
+	ticker.Stop()
+	fmt.Println()
+	if containers == 1 {
+		fmt.Printf("Attempting to delete container...")
+		verbosef("DELETE %s\n", container)
+		resp := c.DeleteContainer(container, globalFlagHeaders.Headers())
+		if resp.StatusCode/100 != 2 {
+			bodyBytes, _ := ioutil.ReadAll(resp.Body)
+			resp.Body.Close()
+			fmt.Fprintf(os.Stderr, "DELETE %s - %d %s - %s\n", container, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+		}
+		resp.Body.Close()
+	} else {
+		fmt.Printf("Attempting to delete the %d containers...", containers)
+		for x := 0; x < containers; x++ {
+			deleteContainer := fmt.Sprintf("%s%d", container, x)
+			verbosef("DELETE %s\n", deleteContainer)
+			resp := c.DeleteContainer(deleteContainer, globalFlagHeaders.Headers())
+			if resp.StatusCode/100 != 2 {
+				bodyBytes, _ := ioutil.ReadAll(resp.Body)
+				resp.Body.Close()
+				fmt.Fprintf(os.Stderr, "DELETE %s - %d %s - %s\n", deleteContainer, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+			}
+			resp.Body.Close()
+		}
+	}
+	fmt.Println()
+	fmt.Printf("%.05fs total time, %.05fs per DELETE, or %.05f DELETEs per second.\n", float64(elapsed)/float64(time.Second), float64(elapsed)/float64(time.Second)/float64(count), float64(count)/float64(elapsed/time.Second))
+	if csvotw != nil {
+		csvotw.Write([]string{
+			fmt.Sprintf("%d", stop.UnixNano()),
+			fmt.Sprintf("%d", count-lastSoFar),
+		})
 	}
 }
 
