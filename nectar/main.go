@@ -48,6 +48,15 @@ var (
 )
 
 var (
+	benchHeadFlags          = flag.NewFlagSet("bench-head", flag.ContinueOnError)
+	benchHeadFlagContainers = benchHeadFlags.Int("containers", 1, "|<number>| Number of containers to use.")
+	benchHeadFlagCount      = benchHeadFlags.Int("count", 1000, "|<number>| Number of objects to head, distributed across containers.")
+	benchHeadFlagCSV        = benchHeadFlags.String("csv", "", "|<filename>| Store the timing of each head into a CSV file.")
+	benchHeadFlagCSVOT      = benchHeadFlags.String("csvot", "", "|<filename>| Store the number of heads performed over time into a CSV file.")
+	benchHeadFlagIterations = benchHeadFlags.Int("iterations", 1, "|<number>| Number of iterations to perform.")
+)
+
+var (
 	benchMixedFlags          = flag.NewFlagSet("bench-mixed", flag.ContinueOnError)
 	benchMixedFlagContainers = benchMixedFlags.Int("containers", 1, "|<number>| Number of containers to use.")
 	benchMixedFlagCSV        = benchMixedFlags.String("csv", "", "|<filename>| Store the timing of each request into a CSV file.")
@@ -104,6 +113,7 @@ func init() {
 	var flagbuf bytes.Buffer
 	globalFlags.SetOutput(&flagbuf)
 	benchGetFlags.SetOutput(&flagbuf)
+	benchHeadFlags.SetOutput(&flagbuf)
 	benchMixedFlags.SetOutput(&flagbuf)
 	benchPostFlags.SetOutput(&flagbuf)
 	benchPutFlags.SetOutput(&flagbuf)
@@ -127,6 +137,11 @@ The following subcommands are available:`, 0, "", ""))
 Benchmark tests GETs. By default, 1000 GETs are done from the named <container>. If you specify [object] it will be used as the prefix for the object names, otherwise "bench-" will be used. Generally, you would use bench-put to populate the containers and objects, and then use bench-get with the same options with the possible addition of -iterations to lengthen the test time.
         `, 0, "  ", "  "))
 		helpFlags(benchGetFlags)
+		fmt.Println("\nbench-head [options] <container> [object]")
+		fmt.Println(brimtext.Wrap(`
+Benchmark tests HEADs. By default, 1000 HEADs are done from the named <container>. If you specify [object] it will be used as the prefix for the object names, otherwise "bench-" will be used. Generally, you would use bench-put to populate the containers and objects, and then use bench-head with the same options with the possible addition of -iterations to lengthen the test time.
+        `, 0, "  ", "  "))
+		helpFlags(benchHeadFlags)
 		fmt.Println("\nbench-mixed [options] <container> [object]")
 		fmt.Println(brimtext.Wrap(`
 Benchmark tests mixed request workloads. If you specify [object] it will be used as a prefix for the object names, otherwise "bench-" will be used. This test is made to be run for a specific span of time (10 minutes by default). You probably want to run with the -continue-on-error global flag; due to the eventual consistency model of Swift|Hummingbird, a few requests may 404.
@@ -246,6 +261,8 @@ func main() {
 	switch cmd {
 	case "bench-get":
 		benchGet(c, args)
+	case "bench-head":
+		benchHead(c, args)
 	case "bench-mixed":
 		benchMixed(c, args)
 	case "bench-post":
@@ -421,6 +438,164 @@ func benchGet(c nectar.Client, args []string) {
 	ticker.Stop()
 	fmt.Println()
 	fmt.Printf("%.05fs total time, %.05fs per GET, or %.05f GETs per second.\n", float64(elapsed)/float64(time.Second), float64(elapsed)/float64(time.Second)/float64(iterations*count), float64(iterations*count)/float64(elapsed/time.Second))
+	if csvotw != nil {
+		csvotw.Write([]string{
+			fmt.Sprintf("%d", stop.UnixNano()),
+			fmt.Sprintf("%d", iterations*count-lastSoFar),
+		})
+	}
+}
+
+func benchHead(c nectar.Client, args []string) {
+	if err := benchHeadFlags.Parse(args); err != nil {
+		fatal(err)
+	}
+	container, object := parsePath(benchHeadFlags.Args())
+	if container == "" {
+		fatalf("bench-head requires <container>\n")
+	}
+	if object == "" {
+		object = "bench-"
+	}
+	containers := *benchHeadFlagContainers
+	if containers < 1 {
+		containers = 1
+	}
+	count := *benchHeadFlagCount
+	if count < 1 {
+		count = 1000
+	}
+	var csvw *csv.Writer
+	var csvlk sync.Mutex
+	if *benchHeadFlagCSV != "" {
+		csvf, err := os.Create(*benchHeadFlagCSV)
+		if err != nil {
+			fatal(err)
+		}
+		csvw = csv.NewWriter(csvf)
+		defer func() {
+			csvw.Flush()
+			csvf.Close()
+		}()
+		csvw.Write([]string{"completion_time_unix_nano", "object_name", "transaction_id", "status", "headers_elapsed_nanoseconds", "elapsed_nanoseconds"})
+	}
+	var csvotw *csv.Writer
+	if *benchHeadFlagCSVOT != "" {
+		csvotf, err := os.Create(*benchHeadFlagCSVOT)
+		if err != nil {
+			fatal(err)
+		}
+		csvotw = csv.NewWriter(csvotf)
+		defer func() {
+			csvotw.Flush()
+			csvotf.Close()
+		}()
+		csvotw.Write([]string{"time_unix_nano", "count_since_last_time"})
+		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0"})
+	}
+	iterations := *benchHeadFlagIterations
+	if iterations < 1 {
+		iterations = 1
+	}
+	concurrency := *globalFlagConcurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	benchChan := make(chan int, concurrency)
+	wg := sync.WaitGroup{}
+	wg.Add(concurrency)
+	for x := 0; x < concurrency; x++ {
+		go func() {
+			var start time.Time
+			var headers_elapsed int64
+			for {
+				i := <-benchChan
+				if i == 0 {
+					break
+				}
+				i--
+				headContainer := container
+				if containers > 1 {
+					headContainer = fmt.Sprintf("%s%d", headContainer, i%containers)
+				}
+				headObject := fmt.Sprintf("%s%d", object, i)
+				verbosef("HEAD %s/%s\n", headContainer, headObject)
+				if csvw != nil {
+					start = time.Now()
+				}
+				resp := c.HeadObject(headContainer, headObject, globalFlagHeaders.Headers())
+				if csvw != nil {
+					headers_elapsed = time.Now().Sub(start).Nanoseconds()
+				}
+				if resp.StatusCode/100 != 2 {
+					bodyBytes, _ := ioutil.ReadAll(resp.Body)
+					resp.Body.Close()
+					if *globalFlagContinueOnError {
+						fmt.Fprintf(os.Stderr, "HEAD %s/%s - %d %s - %s\n", headContainer, headObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+						continue
+					} else {
+						fatalf("HEAD %s/%s - %d %s - %s\n", headContainer, headObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+					}
+				} else {
+					io.Copy(ioutil.Discard, resp.Body)
+				}
+				resp.Body.Close()
+				if csvw != nil {
+					stop := time.Now()
+					elapsed := stop.Sub(start).Nanoseconds()
+					csvlk.Lock()
+					csvw.Write([]string{
+						fmt.Sprintf("%d", stop.UnixNano()),
+						headContainer + "/" + headObject,
+						resp.Header.Get("X-Trans-Id"),
+						fmt.Sprintf("%d", resp.StatusCode),
+						fmt.Sprintf("%d", headers_elapsed),
+						fmt.Sprintf("%d", elapsed),
+					})
+					csvlk.Unlock()
+				}
+			}
+			wg.Done()
+		}()
+	}
+	if containers == 1 {
+		fmt.Printf("Bench-HEAD of %d (%d distinct) objects, from 1 container, at %d concurrency...", iterations*count, count, concurrency)
+	} else {
+		fmt.Printf("Bench-HEAD of %d (%d distinct) objects, distributed across %d containers, at %d concurrency...", iterations*count, count, containers, concurrency)
+	}
+	ticker := time.NewTicker(time.Minute)
+	start := time.Now()
+	lastSoFar := 0
+	for iteration := 0; iteration < iterations; iteration++ {
+		for i := 1; i <= count; i++ {
+			waiting := true
+			for waiting {
+				select {
+				case <-ticker.C:
+					soFar := iteration*count + i - concurrency
+					now := time.Now()
+					elapsed := now.Sub(start)
+					fmt.Printf("\n%.05fs for %d HEADs so far, %.05fs per HEAD, or %.05f HEADs per second...", float64(elapsed)/float64(time.Second), soFar, float64(elapsed)/float64(time.Second)/float64(soFar), float64(soFar)/float64(elapsed/time.Second))
+					if csvotw != nil {
+						csvotw.Write([]string{
+							fmt.Sprintf("%d", now.UnixNano()),
+							fmt.Sprintf("%d", soFar-lastSoFar),
+						})
+						lastSoFar = soFar
+					}
+				case benchChan <- i:
+					waiting = false
+				}
+			}
+		}
+	}
+	close(benchChan)
+	wg.Wait()
+	stop := time.Now()
+	elapsed := stop.Sub(start)
+	ticker.Stop()
+	fmt.Println()
+	fmt.Printf("%.05fs total time, %.05fs per HEAD, or %.05f HEADs per second.\n", float64(elapsed)/float64(time.Second), float64(elapsed)/float64(time.Second)/float64(iterations*count), float64(iterations*count)/float64(elapsed/time.Second))
 	if csvotw != nil {
 		csvotw.Write([]string{
 			fmt.Sprintf("%d", stop.UnixNano()),
