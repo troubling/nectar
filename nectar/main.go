@@ -58,6 +58,14 @@ var (
 )
 
 var (
+	benchPostFlags          = flag.NewFlagSet("bench-post", flag.ContinueOnError)
+	benchPostFlagContainers = benchPostFlags.Int("containers", 1, "|<number>| Number of containers in use.")
+	benchPostFlagCount      = benchPostFlags.Int("count", 1000, "|<number>| Number of objects to post, distributed across containers.")
+	benchPostFlagCSV        = benchPostFlags.String("csv", "", "|<filename>| Store the timing of each post into a CSV file.")
+	benchPostFlagCSVOT      = benchPostFlags.String("csvot", "", "|<filename>| Store the number of posts performed over time into a CSV file.")
+)
+
+var (
 	benchPutFlags          = flag.NewFlagSet("bench-put", flag.ContinueOnError)
 	benchPutFlagContainers = benchPutFlags.Int("containers", 1, "|<number>| Number of containers to use.")
 	benchPutFlagCount      = benchPutFlags.Int("count", 1000, "|<number>| Number of objects to PUT, distributed across containers.")
@@ -97,6 +105,7 @@ func init() {
 	globalFlags.SetOutput(&flagbuf)
 	benchGetFlags.SetOutput(&flagbuf)
 	benchMixedFlags.SetOutput(&flagbuf)
+	benchPostFlags.SetOutput(&flagbuf)
 	benchPutFlags.SetOutput(&flagbuf)
 	downloadFlags.SetOutput(&flagbuf)
 	getFlags.SetOutput(&flagbuf)
@@ -123,6 +132,11 @@ Benchmark tests GETs. By default, 1000 GETs are done from the named <container>.
 Benchmark tests mixed request workloads. If you specify [object] it will be used as a prefix for the object names, otherwise "bench-" will be used. This test is made to be run for a specific span of time (10 minutes by default). You probably want to run with the -continue-on-error global flag; due to the eventual consistency model of Swift|Hummingbird, a few requests may 404.
         `, 0, "  ", "  "))
 		helpFlags(benchMixedFlags)
+		fmt.Println("\nbench-post [options] <container> [object]")
+		fmt.Println(brimtext.Wrap(`
+Benchmark tests POSTs. By default, 1000 POSTs are done against the named <container>. If you specify [object] it will be used as a prefix for the object names, otherwise "bench-" will be used. Generally, you would use bench-put to populate the containers and objects, and then use bench-post with the same options to test POSTing.
+        `, 0, "  ", "  "))
+		helpFlags(benchPostFlags)
 		fmt.Println("\nbench-put [options] <container> [object]")
 		fmt.Println(brimtext.Wrap(`
 Benchmark tests PUTs. By default, 1000 PUTs are done into the named <container>. If you specify [object] it will be used as a prefix for the object names, otherwise "bench-" will be used.
@@ -234,6 +248,8 @@ func main() {
 		benchGet(c, args)
 	case "bench-mixed":
 		benchMixed(c, args)
+	case "bench-post":
+		benchPost(c, args)
 	case "bench-put":
 		benchPut(c, args)
 	case "delete":
@@ -731,6 +747,151 @@ requestLoop:
 			fmt.Sprintf("%d", stop.UnixNano()),
 			"PUT",
 			fmt.Sprintf("%d", puts-lastPuts),
+		})
+	}
+}
+
+func benchPost(c nectar.Client, args []string) {
+	if err := benchPostFlags.Parse(args); err != nil {
+		fatal(err)
+	}
+	container, object := parsePath(benchPostFlags.Args())
+	if container == "" {
+		fatalf("bench-post requires <container>\n")
+	}
+	if object == "" {
+		object = "bench-"
+	}
+	containers := *benchPostFlagContainers
+	if containers < 1 {
+		containers = 1
+	}
+	count := *benchPostFlagCount
+	if count < 1 {
+		count = 1000
+	}
+	var csvw *csv.Writer
+	var csvlk sync.Mutex
+	if *benchPostFlagCSV != "" {
+		csvf, err := os.Create(*benchPostFlagCSV)
+		if err != nil {
+			fatal(err)
+		}
+		csvw = csv.NewWriter(csvf)
+		defer func() {
+			csvw.Flush()
+			csvf.Close()
+		}()
+		csvw.Write([]string{"completion_time_unix_nano", "object_name", "transaction_id", "status", "elapsed_nanoseconds"})
+	}
+	var csvotw *csv.Writer
+	if *benchPostFlagCSVOT != "" {
+		csvotf, err := os.Create(*benchPostFlagCSVOT)
+		if err != nil {
+			fatal(err)
+		}
+		csvotw = csv.NewWriter(csvotf)
+		defer func() {
+			csvotw.Flush()
+			csvotf.Close()
+		}()
+		csvotw.Write([]string{"time_unix_nano", "count_since_last_time"})
+		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0"})
+	}
+	concurrency := *globalFlagConcurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	benchChan := make(chan int, concurrency)
+	wg := sync.WaitGroup{}
+	wg.Add(concurrency)
+	for x := 0; x < concurrency; x++ {
+		go func() {
+			var start time.Time
+			for {
+				i := <-benchChan
+				if i == 0 {
+					break
+				}
+				i--
+				postContainer := container
+				if containers > 1 {
+					postContainer = fmt.Sprintf("%s%d", postContainer, i%containers)
+				}
+				postObject := fmt.Sprintf("%s%d", object, i)
+				verbosef("POST %s/%s\n", postContainer, postObject)
+				if csvw != nil {
+					start = time.Now()
+				}
+				resp := c.PostObject(postContainer, postObject, globalFlagHeaders.Headers())
+				if csvw != nil {
+					stop := time.Now()
+					elapsed := stop.Sub(start).Nanoseconds()
+					csvlk.Lock()
+					csvw.Write([]string{
+						fmt.Sprintf("%d", stop.UnixNano()),
+						postContainer + "/" + postObject,
+						resp.Header.Get("X-Trans-Id"),
+						fmt.Sprintf("%d", resp.StatusCode),
+						fmt.Sprintf("%d", elapsed),
+					})
+					csvlk.Unlock()
+				}
+				if resp.StatusCode/100 != 2 {
+					bodyBytes, _ := ioutil.ReadAll(resp.Body)
+					resp.Body.Close()
+					if *globalFlagContinueOnError {
+						fmt.Fprintf(os.Stderr, "POST %s/%s - %d %s - %s\n", postContainer, postObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+						continue
+					} else {
+						fatalf("POST %s/%s - %d %s - %s\n", postContainer, postObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+					}
+				}
+				resp.Body.Close()
+			}
+			wg.Done()
+		}()
+	}
+	if containers == 1 {
+		fmt.Printf("Bench-POST of %d objects in 1 container, at %d concurrency...", count, concurrency)
+	} else {
+		fmt.Printf("Bench-POST of %d objects, distributed across %d containers, at %d concurrency...", count, containers, concurrency)
+	}
+	ticker := time.NewTicker(time.Minute)
+	start := time.Now()
+	lastSoFar := 0
+	for i := 1; i <= count; i++ {
+		waiting := true
+		for waiting {
+			select {
+			case <-ticker.C:
+				soFar := i - concurrency
+				now := time.Now()
+				elapsed := now.Sub(start)
+				fmt.Printf("\n%.05fs for %d POSTs so far, %.05fs per POST, or %.05f POSTs per second...", float64(elapsed)/float64(time.Second), soFar, float64(elapsed)/float64(time.Second)/float64(soFar), float64(soFar)/float64(elapsed/time.Second))
+				if csvotw != nil {
+					csvotw.Write([]string{
+						fmt.Sprintf("%d", now.UnixNano()),
+						fmt.Sprintf("%d", soFar-lastSoFar),
+					})
+					lastSoFar = soFar
+				}
+			case benchChan <- i:
+				waiting = false
+			}
+		}
+	}
+	close(benchChan)
+	wg.Wait()
+	stop := time.Now()
+	elapsed := stop.Sub(start)
+	ticker.Stop()
+	fmt.Println()
+	fmt.Printf("%.05fs total time, %.05fs per POST, or %.05f POSTs per second.\n", float64(elapsed)/float64(time.Second), float64(elapsed)/float64(time.Second)/float64(count), float64(count)/float64(elapsed/time.Second))
+	if csvotw != nil {
+		csvotw.Write([]string{
+			fmt.Sprintf("%d", stop.UnixNano()),
+			fmt.Sprintf("%d", count-lastSoFar),
 		})
 	}
 }
