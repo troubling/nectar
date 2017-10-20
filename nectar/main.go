@@ -70,7 +70,6 @@ var (
 	benchMixedFlagCSV        = benchMixedFlags.String("csv", "", "|<filename>| Store the timing of each request into a CSV file.")
 	benchMixedFlagCSVOT      = benchMixedFlags.String("csvot", "", "|<filename>| Store the number of requests performed over time into a CSV file.")
 	benchMixedFlagSize       = benchMixedFlags.Int("size", 4096, "|<bytes>| Number of bytes for each object.")
-	benchMixedFlagRatios     = benchMixedFlags.String("ratios", "1,2,2,2,2", "|<deletes>,<gets>,<heads>,<posts>,<puts>| Specifies the number of each type of request in relation to other requests. The default is 1,2,2,2,2 so that two of every other type of request will happen for each DELETE request.")
 	benchMixedFlagTime       = benchMixedFlags.String("time", "10m", "|<timespan>| Amount of time to run the test, such as 10m or 1h.")
 )
 
@@ -819,6 +818,7 @@ func benchMixed(c nectar.Client, args []string) {
 		head
 		post
 		put
+		fake
 	)
 	methods := []string{
 		"DELETE",
@@ -826,20 +826,7 @@ func benchMixed(c nectar.Client, args []string) {
 		"HEAD",
 		"POST",
 		"PUT",
-	}
-	ratios := strings.Split(*benchMixedFlagRatios, ",")
-	if len(ratios) != 5 {
-		fatalf("bench-mixed got a bad -ratio value: %v\n", ratios)
-	}
-	var opOrder []int
-	for op, ratio := range ratios {
-		n, err := strconv.Atoi(ratio)
-		if err != nil {
-			fatalf("bench-mixed got a bad -ratio value: %v %s\n", ratios, err)
-		}
-		for x := 0; x < n; x++ {
-			opOrder = append(opOrder, op)
-		}
+		"FAKE",
 	}
 	var csvw *csv.Writer
 	var csvlk sync.Mutex
@@ -866,8 +853,8 @@ func benchMixed(c nectar.Client, args []string) {
 			csvotw.Flush()
 			csvotf.Close()
 		}()
-		csvotw.Write([]string{"time_unix_nano", "method", "count_since_last_time"})
-		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0"})
+		csvotw.Write([]string{"time_unix_nano", "DELETE", "GET", "HEAD", "POST", "PUT", "FAKE"})
+		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0", "0", "0", "0", "0", "0"})
 	}
 	if containers == 1 {
 		fmt.Printf("Ensuring container exists...")
@@ -907,25 +894,50 @@ func benchMixed(c nectar.Client, args []string) {
 	if concurrency < 1 {
 		concurrency = 1
 	}
-	benchChan := make(chan int, concurrency)
+	timespanTicker := time.NewTicker(timespan)
+	doneChan := make(chan bool)
+	go func() {
+		<-timespanTicker.C
+		close(doneChan)
+	}()
+	deleteChan := make(chan int, concurrency)
+	getChan := make(chan int, concurrency)
+	headChan := make(chan int, concurrency)
+	postChan := make(chan int, concurrency)
+	putChan := make(chan int, concurrency)
+	fakeChan := make(chan int, concurrency)
 	wg := sync.WaitGroup{}
-	wg.Add(concurrency)
 	var deletes int64
 	var gets int64
 	var heads int64
 	var posts int64
 	var puts int64
+	var fakes int64
 	for x := 0; x < concurrency; x++ {
+		wg.Add(1)
 		go func() {
 			rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 			var start time.Time
+			var op int
+			var i int
 			for {
-				i := <-benchChan
-				if i == 0 {
-					break
+				select {
+				case <-doneChan:
+					wg.Done()
+					return
+				case i = <-deleteChan:
+					op = delet
+				case i = <-getChan:
+					op = get
+				case i = <-headChan:
+					op = head
+				case i = <-postChan:
+					op = post
+				case i = <-putChan:
+					op = put
+				case i = <-fakeChan:
+					op = fake
 				}
-				op := i & 0xf
-				i >>= 4
 				opContainer := container
 				if containers > 1 {
 					opContainer = fmt.Sprintf("%s%d", opContainer, i%containers)
@@ -954,6 +966,9 @@ func benchMixed(c nectar.Client, args []string) {
 				case put:
 					resp = c.PutObject(opContainer, opObject, globalFlagHeaders.Headers(), &io.LimitedReader{R: rnd, N: size})
 					atomic.AddInt64(&puts, 1)
+				case fake:
+					resp = c.GetObject(opContainer, "fakelist"+opObject, globalFlagHeaders.Headers())
+					atomic.AddInt64(&fakes, 1)
 				default:
 					panic(fmt.Errorf("programming error: %d", op))
 				}
@@ -983,7 +998,6 @@ func benchMixed(c nectar.Client, args []string) {
 				}
 				resp.Body.Close()
 			}
-			wg.Done()
 		}()
 	}
 	if containers == 1 {
@@ -991,7 +1005,6 @@ func benchMixed(c nectar.Client, args []string) {
 	} else {
 		fmt.Printf("Bench-Mixed for %s, each object is %d bytes, distributed across %d containers, at %d concurrency...", timespan, size, containers, concurrency)
 	}
-	timespanTicker := time.NewTicker(timespan)
 	updateTicker := time.NewTicker(time.Minute)
 	start := time.Now()
 	var lastDeletes int64
@@ -999,34 +1012,14 @@ func benchMixed(c nectar.Client, args []string) {
 	var lastHeads int64
 	var lastPosts int64
 	var lastPuts int64
-	var sentDeletes int
-	var sentPuts int
-requestLoop:
-	for x := 0; ; x++ {
-		var i int
-		op := opOrder[x%len(opOrder)]
-		switch op {
-		case delet:
-			if atomic.LoadInt64(&puts) < 1000 {
-				continue
-			}
-			sentDeletes++
-			i = sentDeletes
-		case put:
-			sentPuts++
-			i = sentPuts
-		default:
-			rang := (int(atomic.LoadInt64(&puts)) - sentDeletes) / 2
-			if rang < 1000 {
-				continue
-			}
-			i = sentDeletes + rang/2 + (x % rang)
-		}
-		waiting := true
-		for waiting {
+	var lastFakes int64
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
 			select {
-			case <-timespanTicker.C:
-				break requestLoop
+			case <-doneChan:
+				return
 			case <-updateTicker.C:
 				now := time.Now()
 				elapsed := now.Sub(start)
@@ -1035,79 +1028,185 @@ requestLoop:
 				snapshotHeads := atomic.LoadInt64(&heads)
 				snapshotPosts := atomic.LoadInt64(&posts)
 				snapshotPuts := atomic.LoadInt64(&puts)
-				total := snapshotDeletes + snapshotGets + snapshotHeads + snapshotPosts + snapshotPuts
+				snapshotFakes := atomic.LoadInt64(&fakes)
+				total := snapshotDeletes + snapshotGets + snapshotHeads + snapshotPosts + snapshotPuts + snapshotFakes
 				fmt.Printf("\n%.05fs for %d requests so far, %.05fs per request, or %.05f requests per second...", float64(elapsed)/float64(time.Second), total, float64(elapsed)/float64(time.Second)/float64(total), float64(total)/float64(elapsed/time.Second))
 				if csvotw != nil {
 					csvotw.Write([]string{
 						fmt.Sprintf("%d", now.UnixNano()),
-						"DELETE",
 						fmt.Sprintf("%d", snapshotDeletes-lastDeletes),
-					})
-					csvotw.Write([]string{
-						fmt.Sprintf("%d", now.UnixNano()),
-						"GET",
 						fmt.Sprintf("%d", snapshotGets-lastGets),
-					})
-					csvotw.Write([]string{
-						fmt.Sprintf("%d", now.UnixNano()),
-						"HEAD",
 						fmt.Sprintf("%d", snapshotHeads-lastHeads),
-					})
-					csvotw.Write([]string{
-						fmt.Sprintf("%d", now.UnixNano()),
-						"POST",
 						fmt.Sprintf("%d", snapshotPosts-lastPosts),
-					})
-					csvotw.Write([]string{
-						fmt.Sprintf("%d", now.UnixNano()),
-						"PUT",
 						fmt.Sprintf("%d", snapshotPuts-lastPuts),
+						fmt.Sprintf("%d", snapshotFakes-lastFakes),
 					})
 					lastDeletes = snapshotDeletes
 					lastGets = snapshotGets
 					lastHeads = snapshotHeads
 					lastPosts = snapshotPosts
 					lastPuts = snapshotPuts
+					lastFakes = snapshotFakes
 				}
-			case benchChan <- i<<4 | op:
-				waiting = false
 			}
 		}
-	}
-	close(benchChan)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var i int
+		for {
+			hi := int(atomic.LoadInt64(&puts)) - 10000 // TODO: CLI option
+			if i > hi {
+				select {
+				case <-doneChan:
+					return
+				default:
+				}
+				time.Sleep(time.Second)
+				continue
+			}
+			select {
+			case <-doneChan:
+				return
+			case deleteChan <- i:
+				i++
+			}
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var i int
+		for {
+			lo := int(atomic.LoadInt64(&deletes)) + concurrency*2
+			if i < lo {
+				i = lo
+			}
+			hi := int(atomic.LoadInt64(&puts)) - concurrency*2
+			if i > hi {
+				i = lo
+			}
+			if i > hi {
+				select {
+				case <-doneChan:
+					return
+				default:
+				}
+				time.Sleep(time.Second)
+				continue
+			}
+			select {
+			case <-doneChan:
+				return
+			case getChan <- i:
+				i++
+			}
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var i int
+		for {
+			lo := int(atomic.LoadInt64(&deletes)) + concurrency*2
+			if i < lo {
+				i = lo
+			}
+			hi := int(atomic.LoadInt64(&puts)) - concurrency*2
+			if i > hi {
+				i = lo
+			}
+			if i > hi {
+				select {
+				case <-doneChan:
+					return
+				default:
+				}
+				time.Sleep(time.Second)
+				continue
+			}
+			select {
+			case <-doneChan:
+				return
+			case headChan <- i:
+				i++
+			}
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var i int
+		for {
+			lo := int(atomic.LoadInt64(&deletes)) + concurrency*2
+			if i < lo {
+				i = lo
+			}
+			hi := int(atomic.LoadInt64(&puts)) - concurrency*2
+			if i > hi {
+				i = lo
+			}
+			if i > hi {
+				select {
+				case <-doneChan:
+					return
+				default:
+				}
+				time.Sleep(time.Second)
+				continue
+			}
+			select {
+			case <-doneChan:
+				return
+			case postChan <- i:
+				i++
+			}
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var i int
+		for {
+			select {
+			case <-doneChan:
+				return
+			case putChan <- i:
+				i++
+			}
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var i int
+		for {
+			select {
+			case <-doneChan:
+				return
+			case fakeChan <- i:
+				i++
+			}
+		}
+	}()
 	wg.Wait()
 	stop := time.Now()
 	elapsed := stop.Sub(start)
 	timespanTicker.Stop()
 	updateTicker.Stop()
 	fmt.Println()
-	total := deletes + gets + heads + posts + puts
+	total := deletes + gets + heads + posts + puts + fakes
 	fmt.Printf("%.05fs for %d requests, %.05fs per request, or %.05f requests per second.\n", float64(elapsed)/float64(time.Second), total, float64(elapsed)/float64(time.Second)/float64(total), float64(total)/float64(elapsed/time.Second))
 	if csvotw != nil {
 		csvotw.Write([]string{
 			fmt.Sprintf("%d", stop.UnixNano()),
-			"DELETE",
 			fmt.Sprintf("%d", deletes-lastDeletes),
-		})
-		csvotw.Write([]string{
-			fmt.Sprintf("%d", stop.UnixNano()),
-			"GET",
 			fmt.Sprintf("%d", gets-lastGets),
-		})
-		csvotw.Write([]string{
-			fmt.Sprintf("%d", stop.UnixNano()),
-			"HEAD",
 			fmt.Sprintf("%d", heads-lastHeads),
-		})
-		csvotw.Write([]string{
-			fmt.Sprintf("%d", stop.UnixNano()),
-			"POST",
 			fmt.Sprintf("%d", posts-lastPosts),
-		})
-		csvotw.Write([]string{
-			fmt.Sprintf("%d", stop.UnixNano()),
-			"PUT",
 			fmt.Sprintf("%d", puts-lastPuts),
+			fmt.Sprintf("%d", fakes-lastFakes),
 		})
 	}
 }
