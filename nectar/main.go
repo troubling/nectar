@@ -995,6 +995,8 @@ func benchMixed(c nectar.Client, args []string) {
 					} else {
 						fatalf("%s %s/%s - %d %s - %s\n", methods[op], opContainer, opObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
 					}
+				} else {
+					io.Copy(ioutil.Discard, resp.Body)
 				}
 				resp.Body.Close()
 			}
