@@ -88,6 +88,7 @@ var (
 	benchPutFlagCSV        = benchPutFlags.String("csv", "", "|<filename>| Store the timing of each PUT into a CSV file.")
 	benchPutFlagCSVOT      = benchPutFlags.String("csvot", "", "|<filename>| Store the number of PUTs performed over time into a CSV file.")
 	benchPutFlagSize       = benchPutFlags.Int("size", 4096, "|<bytes>| Number of bytes for each object.")
+	benchPutFlagMaxSize    = benchPutFlags.Int("maxsize", 0, "|<bytes>| This option will vary object sizes randomly between -size and -maxsize")
 )
 
 var (
@@ -1381,6 +1382,10 @@ func benchPut(c nectar.Client, args []string) {
 	if size < 0 {
 		size = 4096
 	}
+	maxsize := int64(*benchPutFlagMaxSize)
+	if maxsize < size {
+		maxsize = size
+	}
 	var csvw *csv.Writer
 	var csvlk sync.Mutex
 	if *benchPutFlagCSV != "" {
@@ -1469,7 +1474,11 @@ func benchPut(c nectar.Client, args []string) {
 				if csvw != nil {
 					start = time.Now()
 				}
-				resp := c.PutObject(putContainer, putObject, globalFlagHeaders.Headers(), &io.LimitedReader{R: rnd, N: size})
+				sz := size
+				if maxsize > size {
+					sz += int64(rnd.Intn(int(maxsize - size)))
+				}
+				resp := c.PutObject(putContainer, putObject, globalFlagHeaders.Headers(), &io.LimitedReader{R: rnd, N: sz})
 				if csvw != nil {
 					stop := time.Now()
 					elapsed := stop.Sub(start).Nanoseconds()
@@ -1498,10 +1507,16 @@ func benchPut(c nectar.Client, args []string) {
 			wg.Done()
 		}()
 	}
-	if containers == 1 {
-		fmt.Printf("Bench-PUT of %d objects, each %d bytes, into 1 container, at %d concurrency...", count, size, concurrency)
+	var sz string
+	if maxsize > size {
+		sz = fmt.Sprintf("%d-%d", size, maxsize)
 	} else {
-		fmt.Printf("Bench-PUT of %d objects, each %d bytes, distributed across %d containers, at %d concurrency...", count, size, containers, concurrency)
+		sz = fmt.Sprintf("%d", size)
+	}
+	if containers == 1 {
+		fmt.Printf("Bench-PUT of %d objects, each %s bytes, into 1 container, at %d concurrency...", count, sz, concurrency)
+	} else {
+		fmt.Printf("Bench-PUT of %d objects, each %s bytes, distributed across %d containers, at %d concurrency...", count, sz, containers, concurrency)
 	}
 	ticker := time.NewTicker(time.Minute)
 	start := time.Now()
