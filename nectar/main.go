@@ -336,6 +336,7 @@ func benchDelete(c nectar.Client, args []string) {
 			csvf.Close()
 		}()
 		csvw.Write([]string{"completion_time_unix_nano", "object_name", "transaction_id", "status", "elapsed_nanoseconds"})
+		csvw.Flush()
 	}
 	var csvotw *csv.Writer
 	if *benchDeleteFlagCSVOT != "" {
@@ -350,6 +351,7 @@ func benchDelete(c nectar.Client, args []string) {
 		}()
 		csvotw.Write([]string{"time_unix_nano", "count_since_last_time"})
 		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0"})
+		csvotw.Flush()
 	}
 	concurrency := *globalFlagConcurrency
 	if concurrency < 1 {
@@ -388,6 +390,7 @@ func benchDelete(c nectar.Client, args []string) {
 						fmt.Sprintf("%d", resp.StatusCode),
 						fmt.Sprintf("%d", elapsed),
 					})
+					csvw.Flush()
 					csvlk.Unlock()
 				}
 				if resp.StatusCode/100 != 2 {
@@ -427,6 +430,7 @@ func benchDelete(c nectar.Client, args []string) {
 						fmt.Sprintf("%d", now.UnixNano()),
 						fmt.Sprintf("%d", soFar-lastSoFar),
 					})
+					csvotw.Flush()
 					lastSoFar = soFar
 				}
 			case benchChan <- i:
@@ -471,6 +475,7 @@ func benchDelete(c nectar.Client, args []string) {
 			fmt.Sprintf("%d", stop.UnixNano()),
 			fmt.Sprintf("%d", count-lastSoFar),
 		})
+		csvotw.Flush()
 	}
 }
 
@@ -506,6 +511,7 @@ func benchGet(c nectar.Client, args []string) {
 			csvf.Close()
 		}()
 		csvw.Write([]string{"completion_time_unix_nano", "object_name", "transaction_id", "status", "headers_elapsed_nanoseconds", "elapsed_nanoseconds"})
+		csvw.Flush()
 	}
 	var csvotw *csv.Writer
 	if *benchGetFlagCSVOT != "" {
@@ -520,6 +526,7 @@ func benchGet(c nectar.Client, args []string) {
 		}()
 		csvotw.Write([]string{"time_unix_nano", "count_since_last_time"})
 		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0"})
+		csvotw.Flush()
 	}
 	iterations := *benchGetFlagIterations
 	if iterations < 1 {
@@ -580,6 +587,7 @@ func benchGet(c nectar.Client, args []string) {
 						fmt.Sprintf("%d", headers_elapsed),
 						fmt.Sprintf("%d", elapsed),
 					})
+					csvw.Flush()
 					csvlk.Unlock()
 				}
 			}
@@ -609,6 +617,7 @@ func benchGet(c nectar.Client, args []string) {
 							fmt.Sprintf("%d", now.UnixNano()),
 							fmt.Sprintf("%d", soFar-lastSoFar),
 						})
+						csvotw.Flush()
 						lastSoFar = soFar
 					}
 				case benchChan <- i:
@@ -629,6 +638,7 @@ func benchGet(c nectar.Client, args []string) {
 			fmt.Sprintf("%d", stop.UnixNano()),
 			fmt.Sprintf("%d", iterations*count-lastSoFar),
 		})
+		csvotw.Flush()
 	}
 }
 
@@ -664,6 +674,7 @@ func benchHead(c nectar.Client, args []string) {
 			csvf.Close()
 		}()
 		csvw.Write([]string{"completion_time_unix_nano", "object_name", "transaction_id", "status", "headers_elapsed_nanoseconds", "elapsed_nanoseconds"})
+		csvw.Flush()
 	}
 	var csvotw *csv.Writer
 	if *benchHeadFlagCSVOT != "" {
@@ -678,6 +689,7 @@ func benchHead(c nectar.Client, args []string) {
 		}()
 		csvotw.Write([]string{"time_unix_nano", "count_since_last_time"})
 		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0"})
+		csvotw.Flush()
 	}
 	iterations := *benchHeadFlagIterations
 	if iterations < 1 {
@@ -738,6 +750,7 @@ func benchHead(c nectar.Client, args []string) {
 						fmt.Sprintf("%d", headers_elapsed),
 						fmt.Sprintf("%d", elapsed),
 					})
+					csvw.Flush()
 					csvlk.Unlock()
 				}
 			}
@@ -767,6 +780,7 @@ func benchHead(c nectar.Client, args []string) {
 							fmt.Sprintf("%d", now.UnixNano()),
 							fmt.Sprintf("%d", soFar-lastSoFar),
 						})
+						csvotw.Flush()
 						lastSoFar = soFar
 					}
 				case benchChan <- i:
@@ -787,6 +801,7 @@ func benchHead(c nectar.Client, args []string) {
 			fmt.Sprintf("%d", stop.UnixNano()),
 			fmt.Sprintf("%d", iterations*count-lastSoFar),
 		})
+		csvotw.Flush()
 	}
 }
 
@@ -842,6 +857,7 @@ func benchMixed(c nectar.Client, args []string) {
 			csvf.Close()
 		}()
 		csvw.Write([]string{"completion_time_unix_nano", "method", "object_name", "transaction_id", "status", "elapsed_nanoseconds"})
+		csvw.Flush()
 	}
 	var csvotw *csv.Writer
 	if *benchMixedFlagCSVOT != "" {
@@ -856,6 +872,7 @@ func benchMixed(c nectar.Client, args []string) {
 		}()
 		csvotw.Write([]string{"time_unix_nano", "DELETE", "GET", "HEAD", "POST", "PUT", "FAKE"})
 		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0", "0", "0", "0", "0", "0"})
+		csvotw.Flush()
 	}
 	if containers == 1 {
 		fmt.Printf("Ensuring container exists...")
@@ -985,6 +1002,7 @@ func benchMixed(c nectar.Client, args []string) {
 						fmt.Sprintf("%d", resp.StatusCode),
 						fmt.Sprintf("%d", elapsed),
 					})
+					csvw.Flush()
 					csvlk.Unlock()
 				}
 				if resp.StatusCode/100 != 2 {
@@ -1044,6 +1062,7 @@ func benchMixed(c nectar.Client, args []string) {
 						fmt.Sprintf("%d", snapshotPuts-lastPuts),
 						fmt.Sprintf("%d", snapshotFakes-lastFakes),
 					})
+					csvotw.Flush()
 					lastDeletes = snapshotDeletes
 					lastGets = snapshotGets
 					lastHeads = snapshotHeads
@@ -1211,6 +1230,7 @@ func benchMixed(c nectar.Client, args []string) {
 			fmt.Sprintf("%d", puts-lastPuts),
 			fmt.Sprintf("%d", fakes-lastFakes),
 		})
+		csvotw.Flush()
 	}
 }
 
@@ -1246,6 +1266,7 @@ func benchPost(c nectar.Client, args []string) {
 			csvf.Close()
 		}()
 		csvw.Write([]string{"completion_time_unix_nano", "object_name", "transaction_id", "status", "elapsed_nanoseconds"})
+		csvw.Flush()
 	}
 	var csvotw *csv.Writer
 	if *benchPostFlagCSVOT != "" {
@@ -1260,6 +1281,7 @@ func benchPost(c nectar.Client, args []string) {
 		}()
 		csvotw.Write([]string{"time_unix_nano", "count_since_last_time"})
 		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0"})
+		csvotw.Flush()
 	}
 	concurrency := *globalFlagConcurrency
 	if concurrency < 1 {
@@ -1298,6 +1320,7 @@ func benchPost(c nectar.Client, args []string) {
 						fmt.Sprintf("%d", resp.StatusCode),
 						fmt.Sprintf("%d", elapsed),
 					})
+					csvw.Flush()
 					csvlk.Unlock()
 				}
 				if resp.StatusCode/100 != 2 {
@@ -1337,6 +1360,7 @@ func benchPost(c nectar.Client, args []string) {
 						fmt.Sprintf("%d", now.UnixNano()),
 						fmt.Sprintf("%d", soFar-lastSoFar),
 					})
+					csvotw.Flush()
 					lastSoFar = soFar
 				}
 			case benchChan <- i:
@@ -1356,6 +1380,7 @@ func benchPost(c nectar.Client, args []string) {
 			fmt.Sprintf("%d", stop.UnixNano()),
 			fmt.Sprintf("%d", count-lastSoFar),
 		})
+		csvotw.Flush()
 	}
 }
 
@@ -1399,6 +1424,7 @@ func benchPut(c nectar.Client, args []string) {
 			csvf.Close()
 		}()
 		csvw.Write([]string{"completion_time_unix_nano", "object_name", "transaction_id", "status", "elapsed_nanoseconds"})
+		csvw.Flush()
 	}
 	var csvotw *csv.Writer
 	if *benchPutFlagCSVOT != "" {
@@ -1413,6 +1439,7 @@ func benchPut(c nectar.Client, args []string) {
 		}()
 		csvotw.Write([]string{"time_unix_nano", "count_since_last_time"})
 		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0"})
+		csvotw.Flush()
 	}
 	if containers == 1 {
 		fmt.Printf("Ensuring container exists...")
@@ -1490,6 +1517,7 @@ func benchPut(c nectar.Client, args []string) {
 						fmt.Sprintf("%d", resp.StatusCode),
 						fmt.Sprintf("%d", elapsed),
 					})
+					csvw.Flush()
 					csvlk.Unlock()
 				}
 				if resp.StatusCode/100 != 2 {
@@ -1535,6 +1563,7 @@ func benchPut(c nectar.Client, args []string) {
 						fmt.Sprintf("%d", now.UnixNano()),
 						fmt.Sprintf("%d", soFar-lastSoFar),
 					})
+					csvotw.Flush()
 					lastSoFar = soFar
 				}
 			case benchChan <- i:
@@ -1554,6 +1583,7 @@ func benchPut(c nectar.Client, args []string) {
 			fmt.Sprintf("%d", stop.UnixNano()),
 			fmt.Sprintf("%d", count-lastSoFar),
 		})
+		csvotw.Flush()
 	}
 }
 
