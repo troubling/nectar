@@ -834,7 +834,6 @@ func benchMixed(c nectar.Client, args []string) {
 		head
 		post
 		put
-		fake
 	)
 	methods := []string{
 		"DELETE",
@@ -842,7 +841,6 @@ func benchMixed(c nectar.Client, args []string) {
 		"HEAD",
 		"POST",
 		"PUT",
-		"FAKE",
 	}
 	var csvw *csv.Writer
 	var csvlk sync.Mutex
@@ -870,7 +868,7 @@ func benchMixed(c nectar.Client, args []string) {
 			csvotw.Flush()
 			csvotf.Close()
 		}()
-		csvotw.Write([]string{"time_unix_nano", "DELETE", "GET", "HEAD", "POST", "PUT", "FAKE"})
+		csvotw.Write([]string{"time_unix_nano", "DELETE", "GET", "HEAD", "POST", "PUT"})
 		csvotw.Write([]string{fmt.Sprintf("%d", time.Now().UnixNano()), "0", "0", "0", "0", "0", "0"})
 		csvotw.Flush()
 	}
@@ -923,14 +921,12 @@ func benchMixed(c nectar.Client, args []string) {
 	headChan := make(chan int, concurrency)
 	postChan := make(chan int, concurrency)
 	putChan := make(chan int, concurrency)
-	fakeChan := make(chan int, concurrency)
 	wg := sync.WaitGroup{}
 	var deletes int64
 	var gets int64
 	var heads int64
 	var posts int64
 	var puts int64
-	var fakes int64
 	for x := 0; x < concurrency; x++ {
 		wg.Add(1)
 		go func() {
@@ -953,8 +949,6 @@ func benchMixed(c nectar.Client, args []string) {
 					op = post
 				case i = <-putChan:
 					op = put
-				case i = <-fakeChan:
-					op = fake
 				}
 				opContainer := container
 				if containers > 1 {
@@ -984,9 +978,6 @@ func benchMixed(c nectar.Client, args []string) {
 				case put:
 					resp = c.PutObject(opContainer, opObject, globalFlagHeaders.Headers(), &io.LimitedReader{R: rnd, N: size})
 					atomic.AddInt64(&puts, 1)
-				case fake:
-					resp = c.GetObject(opContainer, "fakelist"+opObject, globalFlagHeaders.Headers())
-					atomic.AddInt64(&fakes, 1)
 				default:
 					panic(fmt.Errorf("programming error: %d", op))
 				}
@@ -1033,7 +1024,6 @@ func benchMixed(c nectar.Client, args []string) {
 	var lastHeads int64
 	var lastPosts int64
 	var lastPuts int64
-	var lastFakes int64
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -1049,8 +1039,7 @@ func benchMixed(c nectar.Client, args []string) {
 				snapshotHeads := atomic.LoadInt64(&heads)
 				snapshotPosts := atomic.LoadInt64(&posts)
 				snapshotPuts := atomic.LoadInt64(&puts)
-				snapshotFakes := atomic.LoadInt64(&fakes)
-				total := snapshotDeletes + snapshotGets + snapshotHeads + snapshotPosts + snapshotPuts + snapshotFakes
+				total := snapshotDeletes + snapshotGets + snapshotHeads + snapshotPosts + snapshotPuts
 				fmt.Printf("\n%.05fs for %d requests so far, %.05fs per request, or %.05f requests per second...", float64(elapsed)/float64(time.Second), total, float64(elapsed)/float64(time.Second)/float64(total), float64(total)/float64(elapsed/time.Second))
 				if csvotw != nil {
 					csvotw.Write([]string{
@@ -1060,7 +1049,6 @@ func benchMixed(c nectar.Client, args []string) {
 						fmt.Sprintf("%d", snapshotHeads-lastHeads),
 						fmt.Sprintf("%d", snapshotPosts-lastPosts),
 						fmt.Sprintf("%d", snapshotPuts-lastPuts),
-						fmt.Sprintf("%d", snapshotFakes-lastFakes),
 					})
 					csvotw.Flush()
 					lastDeletes = snapshotDeletes
@@ -1068,7 +1056,6 @@ func benchMixed(c nectar.Client, args []string) {
 					lastHeads = snapshotHeads
 					lastPosts = snapshotPosts
 					lastPuts = snapshotPuts
-					lastFakes = snapshotFakes
 				}
 			}
 		}
@@ -1199,26 +1186,13 @@ func benchMixed(c nectar.Client, args []string) {
 			}
 		}
 	}()
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		var i int
-		for {
-			select {
-			case <-doneChan:
-				return
-			case fakeChan <- i:
-				i++
-			}
-		}
-	}()
 	wg.Wait()
 	stop := time.Now()
 	elapsed := stop.Sub(start)
 	timespanTicker.Stop()
 	updateTicker.Stop()
 	fmt.Println()
-	total := deletes + gets + heads + posts + puts + fakes
+	total := deletes + gets + heads + posts + puts
 	fmt.Printf("%.05fs for %d requests, %.05fs per request, or %.05f requests per second.\n", float64(elapsed)/float64(time.Second), total, float64(elapsed)/float64(time.Second)/float64(total), float64(total)/float64(elapsed/time.Second))
 	if csvotw != nil {
 		csvotw.Write([]string{
@@ -1228,7 +1202,6 @@ func benchMixed(c nectar.Client, args []string) {
 			fmt.Sprintf("%d", heads-lastHeads),
 			fmt.Sprintf("%d", posts-lastPosts),
 			fmt.Sprintf("%d", puts-lastPuts),
-			fmt.Sprintf("%d", fakes-lastFakes),
 		})
 		csvotw.Flush()
 	}
