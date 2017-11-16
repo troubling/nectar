@@ -159,7 +159,10 @@ Benchmark tests HEADs. By default, 1000 HEADs are done from the named <container
 		fmt.Println("\nbench-mixed [options] <container> [object]")
 		fmt.Println(brimtext.Wrap(`
 Benchmark tests mixed request workloads. If you specify [object] it will be used as a prefix for the object names, otherwise "bench-" will be used. This test is made to be run for a specific span of time (10 minutes by default). You probably want to run with the -continue-on-error global flag; due to the eventual consistency model of Swift|Hummingbird, a few requests may 404.
+
+Note: The concurrency setting for this test will be used for each request type separately. So, with five request types (PUT, POST, GET, HEAD, DELETE), this means five times the concurrency value specified.
         `, 0, "  ", "  "))
+		fmt.Println()
 		helpFlags(benchMixedFlags)
 		fmt.Println("\nbench-post [options] <container> [object]")
 		fmt.Println(brimtext.Wrap(`
@@ -930,9 +933,8 @@ func benchMixed(c nectar.Client, args []string) {
 	for x := 0; x < concurrency; x++ {
 		wg.Add(1)
 		go func() {
-			rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 			var start time.Time
-			var op int
+			op := delet
 			var i int
 			for {
 				select {
@@ -940,15 +942,6 @@ func benchMixed(c nectar.Client, args []string) {
 					wg.Done()
 					return
 				case i = <-deleteChan:
-					op = delet
-				case i = <-getChan:
-					op = get
-				case i = <-headChan:
-					op = head
-				case i = <-postChan:
-					op = post
-				case i = <-putChan:
-					op = put
 				}
 				opContainer := container
 				if containers > 1 {
@@ -959,28 +952,223 @@ func benchMixed(c nectar.Client, args []string) {
 				if csvw != nil {
 					start = time.Now()
 				}
-				var resp *http.Response
-				switch op {
-				case delet:
-					resp = c.DeleteObject(opContainer, opObject, globalFlagHeaders.Headers())
-					atomic.AddInt64(&deletes, 1)
-				case get:
-					resp = c.GetObject(opContainer, opObject, globalFlagHeaders.Headers())
-					atomic.AddInt64(&gets, 1)
-				case head:
-					resp = c.HeadObject(opContainer, opObject, globalFlagHeaders.Headers())
-					atomic.AddInt64(&heads, 1)
-				case post:
-					headers := globalFlagHeaders.Headers()
-					headers["X-Object-Meta-Bench-Mixed"] = strconv.Itoa(i)
-					resp = c.PostObject(opContainer, opObject, headers)
-					atomic.AddInt64(&posts, 1)
-				case put:
-					resp = c.PutObject(opContainer, opObject, globalFlagHeaders.Headers(), &io.LimitedReader{R: rnd, N: size})
-					atomic.AddInt64(&puts, 1)
-				default:
-					panic(fmt.Errorf("programming error: %d", op))
+				resp := c.DeleteObject(opContainer, opObject, globalFlagHeaders.Headers())
+				atomic.AddInt64(&deletes, 1)
+				if csvw != nil {
+					stop := time.Now()
+					elapsed := stop.Sub(start).Nanoseconds()
+					csvlk.Lock()
+					csvw.Write([]string{
+						fmt.Sprintf("%d", stop.UnixNano()),
+						methods[op],
+						opContainer + "/" + opObject,
+						resp.Header.Get("X-Trans-Id"),
+						fmt.Sprintf("%d", resp.StatusCode),
+						fmt.Sprintf("%d", elapsed),
+					})
+					csvw.Flush()
+					csvlk.Unlock()
 				}
+				if resp.StatusCode/100 != 2 {
+					bodyBytes, _ := ioutil.ReadAll(resp.Body)
+					resp.Body.Close()
+					if *globalFlagContinueOnError {
+						fmt.Fprintf(os.Stderr, "%s %s/%s - %d %s - %s\n", methods[op], opContainer, opObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+						continue
+					} else {
+						fatalf("%s %s/%s - %d %s - %s\n", methods[op], opContainer, opObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+					}
+				} else {
+					io.Copy(ioutil.Discard, resp.Body)
+				}
+				resp.Body.Close()
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			var start time.Time
+			op := get
+			var i int
+			for {
+				select {
+				case <-doneChan:
+					wg.Done()
+					return
+				case i = <-getChan:
+				}
+				opContainer := container
+				if containers > 1 {
+					opContainer = fmt.Sprintf("%s%d", opContainer, i%containers)
+				}
+				opObject := fmt.Sprintf("%s%d", object, i)
+				verbosef("%s %s/%s\n", methods[op], opContainer, opObject)
+				if csvw != nil {
+					start = time.Now()
+				}
+				resp := c.GetObject(opContainer, opObject, globalFlagHeaders.Headers())
+				atomic.AddInt64(&gets, 1)
+				if csvw != nil {
+					stop := time.Now()
+					elapsed := stop.Sub(start).Nanoseconds()
+					csvlk.Lock()
+					csvw.Write([]string{
+						fmt.Sprintf("%d", stop.UnixNano()),
+						methods[op],
+						opContainer + "/" + opObject,
+						resp.Header.Get("X-Trans-Id"),
+						fmt.Sprintf("%d", resp.StatusCode),
+						fmt.Sprintf("%d", elapsed),
+					})
+					csvw.Flush()
+					csvlk.Unlock()
+				}
+				if resp.StatusCode/100 != 2 {
+					bodyBytes, _ := ioutil.ReadAll(resp.Body)
+					resp.Body.Close()
+					if *globalFlagContinueOnError {
+						fmt.Fprintf(os.Stderr, "%s %s/%s - %d %s - %s\n", methods[op], opContainer, opObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+						continue
+					} else {
+						fatalf("%s %s/%s - %d %s - %s\n", methods[op], opContainer, opObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+					}
+				} else {
+					io.Copy(ioutil.Discard, resp.Body)
+				}
+				resp.Body.Close()
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			var start time.Time
+			op := head
+			var i int
+			for {
+				select {
+				case <-doneChan:
+					wg.Done()
+					return
+				case i = <-headChan:
+				}
+				opContainer := container
+				if containers > 1 {
+					opContainer = fmt.Sprintf("%s%d", opContainer, i%containers)
+				}
+				opObject := fmt.Sprintf("%s%d", object, i)
+				verbosef("%s %s/%s\n", methods[op], opContainer, opObject)
+				if csvw != nil {
+					start = time.Now()
+				}
+				resp := c.HeadObject(opContainer, opObject, globalFlagHeaders.Headers())
+				atomic.AddInt64(&heads, 1)
+				if csvw != nil {
+					stop := time.Now()
+					elapsed := stop.Sub(start).Nanoseconds()
+					csvlk.Lock()
+					csvw.Write([]string{
+						fmt.Sprintf("%d", stop.UnixNano()),
+						methods[op],
+						opContainer + "/" + opObject,
+						resp.Header.Get("X-Trans-Id"),
+						fmt.Sprintf("%d", resp.StatusCode),
+						fmt.Sprintf("%d", elapsed),
+					})
+					csvw.Flush()
+					csvlk.Unlock()
+				}
+				if resp.StatusCode/100 != 2 {
+					bodyBytes, _ := ioutil.ReadAll(resp.Body)
+					resp.Body.Close()
+					if *globalFlagContinueOnError {
+						fmt.Fprintf(os.Stderr, "%s %s/%s - %d %s - %s\n", methods[op], opContainer, opObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+						continue
+					} else {
+						fatalf("%s %s/%s - %d %s - %s\n", methods[op], opContainer, opObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+					}
+				} else {
+					io.Copy(ioutil.Discard, resp.Body)
+				}
+				resp.Body.Close()
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			var start time.Time
+			op := post
+			var i int
+			for {
+				select {
+				case <-doneChan:
+					wg.Done()
+					return
+				case i = <-postChan:
+				}
+				opContainer := container
+				if containers > 1 {
+					opContainer = fmt.Sprintf("%s%d", opContainer, i%containers)
+				}
+				opObject := fmt.Sprintf("%s%d", object, i)
+				verbosef("%s %s/%s\n", methods[op], opContainer, opObject)
+				if csvw != nil {
+					start = time.Now()
+				}
+				headers := globalFlagHeaders.Headers()
+				headers["X-Object-Meta-Bench-Mixed"] = strconv.Itoa(i)
+				resp := c.PostObject(opContainer, opObject, headers)
+				atomic.AddInt64(&posts, 1)
+				if csvw != nil {
+					stop := time.Now()
+					elapsed := stop.Sub(start).Nanoseconds()
+					csvlk.Lock()
+					csvw.Write([]string{
+						fmt.Sprintf("%d", stop.UnixNano()),
+						methods[op],
+						opContainer + "/" + opObject,
+						resp.Header.Get("X-Trans-Id"),
+						fmt.Sprintf("%d", resp.StatusCode),
+						fmt.Sprintf("%d", elapsed),
+					})
+					csvw.Flush()
+					csvlk.Unlock()
+				}
+				if resp.StatusCode/100 != 2 {
+					bodyBytes, _ := ioutil.ReadAll(resp.Body)
+					resp.Body.Close()
+					if *globalFlagContinueOnError {
+						fmt.Fprintf(os.Stderr, "%s %s/%s - %d %s - %s\n", methods[op], opContainer, opObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+						continue
+					} else {
+						fatalf("%s %s/%s - %d %s - %s\n", methods[op], opContainer, opObject, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+					}
+				} else {
+					io.Copy(ioutil.Discard, resp.Body)
+				}
+				resp.Body.Close()
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+			var start time.Time
+			op := put
+			var i int
+			for {
+				select {
+				case <-doneChan:
+					wg.Done()
+					return
+				case i = <-putChan:
+				}
+				opContainer := container
+				if containers > 1 {
+					opContainer = fmt.Sprintf("%s%d", opContainer, i%containers)
+				}
+				opObject := fmt.Sprintf("%s%d", object, i)
+				verbosef("%s %s/%s\n", methods[op], opContainer, opObject)
+				if csvw != nil {
+					start = time.Now()
+				}
+				resp := c.PutObject(opContainer, opObject, globalFlagHeaders.Headers(), &io.LimitedReader{R: rnd, N: size})
+				atomic.AddInt64(&puts, 1)
 				if csvw != nil {
 					stop := time.Now()
 					elapsed := stop.Sub(start).Nanoseconds()
