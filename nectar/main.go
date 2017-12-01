@@ -427,7 +427,7 @@ func benchDelete(c nectar.Client, args []string) {
 				soFar := i - concurrency
 				now := time.Now()
 				elapsed := now.Sub(start)
-				fmt.Printf("\n%.05fs for %d DELETEs so far, %.05fs per DELETE, or %.05f DELETEs per second...", float64(elapsed)/float64(time.Second), soFar, float64(elapsed)/float64(time.Second)/float64(soFar), float64(soFar)/float64(elapsed/time.Second))
+				fmt.Printf("\n%.05fs for %d DELETEs so far, %.05f DELETEs per second...", float64(elapsed)/float64(time.Second), soFar, float64(soFar)/float64(elapsed/time.Second))
 				if csvotw != nil {
 					csvotw.Write([]string{
 						fmt.Sprintf("%d", now.UnixNano()),
@@ -472,7 +472,7 @@ func benchDelete(c nectar.Client, args []string) {
 		}
 	}
 	fmt.Println()
-	fmt.Printf("%.05fs total time, %.05fs per DELETE, or %.05f DELETEs per second.\n", float64(elapsed)/float64(time.Second), float64(elapsed)/float64(time.Second)/float64(count), float64(count)/float64(elapsed/time.Second))
+	fmt.Printf("%.05fs total time, %.05f DELETEs per second.\n", float64(elapsed)/float64(time.Second), float64(count)/float64(elapsed/time.Second))
 	if csvotw != nil {
 		csvotw.Write([]string{
 			fmt.Sprintf("%d", stop.UnixNano()),
@@ -605,7 +605,7 @@ func benchGet(c nectar.Client, args []string) {
 	ticker := time.NewTicker(time.Minute)
 	start := time.Now()
 	lastSoFar := 0
-	for iteration := 0; iteration <= iterations; iteration++ {
+	for iteration := 0; iteration < iterations; iteration++ {
 		for i := 1; i <= count; i++ {
 			waiting := true
 			for waiting {
@@ -614,7 +614,7 @@ func benchGet(c nectar.Client, args []string) {
 					soFar := iteration*count + i - concurrency
 					now := time.Now()
 					elapsed := now.Sub(start)
-					fmt.Printf("\n%.05fs for %d GETs so far, %.05fs per GET, or %.05f GETs per second...", float64(elapsed)/float64(time.Second), soFar, float64(elapsed)/float64(time.Second)/float64(soFar), float64(soFar)/float64(elapsed/time.Second))
+					fmt.Printf("\n%.05fs for %d GETs so far, %.05f GETs per second...", float64(elapsed)/float64(time.Second), soFar, float64(soFar)/float64(elapsed/time.Second))
 					if csvotw != nil {
 						csvotw.Write([]string{
 							fmt.Sprintf("%d", now.UnixNano()),
@@ -635,7 +635,7 @@ func benchGet(c nectar.Client, args []string) {
 	elapsed := stop.Sub(start)
 	ticker.Stop()
 	fmt.Println()
-	fmt.Printf("%.05fs total time, %.05fs per GET, or %.05f GETs per second.\n", float64(elapsed)/float64(time.Second), float64(elapsed)/float64(time.Second)/float64(iterations*count), float64(iterations*count)/float64(elapsed/time.Second))
+	fmt.Printf("%.05fs total time, %.05f GETs per second.\n", float64(elapsed)/float64(time.Second), float64(iterations*count)/float64(elapsed/time.Second))
 	if csvotw != nil {
 		csvotw.Write([]string{
 			fmt.Sprintf("%d", stop.UnixNano()),
@@ -777,7 +777,7 @@ func benchHead(c nectar.Client, args []string) {
 					soFar := iteration*count + i - concurrency
 					now := time.Now()
 					elapsed := now.Sub(start)
-					fmt.Printf("\n%.05fs for %d HEADs so far, %.05fs per HEAD, or %.05f HEADs per second...", float64(elapsed)/float64(time.Second), soFar, float64(elapsed)/float64(time.Second)/float64(soFar), float64(soFar)/float64(elapsed/time.Second))
+					fmt.Printf("\n%.05fs for %d HEADs so far, %.05f HEADs per second...", float64(elapsed)/float64(time.Second), soFar, float64(soFar)/float64(elapsed/time.Second))
 					if csvotw != nil {
 						csvotw.Write([]string{
 							fmt.Sprintf("%d", now.UnixNano()),
@@ -798,7 +798,7 @@ func benchHead(c nectar.Client, args []string) {
 	elapsed := stop.Sub(start)
 	ticker.Stop()
 	fmt.Println()
-	fmt.Printf("%.05fs total time, %.05fs per HEAD, or %.05f HEADs per second.\n", float64(elapsed)/float64(time.Second), float64(elapsed)/float64(time.Second)/float64(iterations*count), float64(iterations*count)/float64(elapsed/time.Second))
+	fmt.Printf("%.05fs total time, %.05f HEADs per second.\n", float64(elapsed)/float64(time.Second), float64(iterations*count)/float64(elapsed/time.Second))
 	if csvotw != nil {
 		csvotw.Write([]string{
 			fmt.Sprintf("%d", stop.UnixNano()),
@@ -1228,7 +1228,7 @@ func benchMixed(c nectar.Client, args []string) {
 				snapshotPosts := atomic.LoadInt64(&posts)
 				snapshotPuts := atomic.LoadInt64(&puts)
 				total := snapshotDeletes + snapshotGets + snapshotHeads + snapshotPosts + snapshotPuts
-				fmt.Printf("\n%.05fs for %d requests so far, %.05fs per request, or %.05f requests per second...", float64(elapsed)/float64(time.Second), total, float64(elapsed)/float64(time.Second)/float64(total), float64(total)/float64(elapsed/time.Second))
+				fmt.Printf("\n%.05fs for %d requests so far, %.05f requests per second...", float64(elapsed)/float64(time.Second), total, float64(total)/float64(elapsed/time.Second))
 				if csvotw != nil {
 					csvotw.Write([]string{
 						fmt.Sprintf("%d", now.UnixNano()),
@@ -1381,7 +1381,7 @@ func benchMixed(c nectar.Client, args []string) {
 	updateTicker.Stop()
 	fmt.Println()
 	total := deletes + gets + heads + posts + puts
-	fmt.Printf("%.05fs for %d requests, %.05fs per request, or %.05f requests per second.\n", float64(elapsed)/float64(time.Second), total, float64(elapsed)/float64(time.Second)/float64(total), float64(total)/float64(elapsed/time.Second))
+	fmt.Printf("%.05fs for %d requests, %.05f requests per second.\n", float64(elapsed)/float64(time.Second), total, float64(total)/float64(elapsed/time.Second))
 	if csvotw != nil {
 		csvotw.Write([]string{
 			fmt.Sprintf("%d", stop.UnixNano()),
@@ -1515,7 +1515,7 @@ func benchPost(c nectar.Client, args []string) {
 				soFar := i - concurrency
 				now := time.Now()
 				elapsed := now.Sub(start)
-				fmt.Printf("\n%.05fs for %d POSTs so far, %.05fs per POST, or %.05f POSTs per second...", float64(elapsed)/float64(time.Second), soFar, float64(elapsed)/float64(time.Second)/float64(soFar), float64(soFar)/float64(elapsed/time.Second))
+				fmt.Printf("\n%.05fs for %d POSTs so far, %.05f POSTs per second...", float64(elapsed)/float64(time.Second), soFar, float64(soFar)/float64(elapsed/time.Second))
 				if csvotw != nil {
 					csvotw.Write([]string{
 						fmt.Sprintf("%d", now.UnixNano()),
@@ -1535,7 +1535,7 @@ func benchPost(c nectar.Client, args []string) {
 	elapsed := stop.Sub(start)
 	ticker.Stop()
 	fmt.Println()
-	fmt.Printf("%.05fs total time, %.05fs per POST, or %.05f POSTs per second.\n", float64(elapsed)/float64(time.Second), float64(elapsed)/float64(time.Second)/float64(count), float64(count)/float64(elapsed/time.Second))
+	fmt.Printf("%.05fs total time, %.05f POSTs per second.\n", float64(elapsed)/float64(time.Second), float64(count)/float64(elapsed/time.Second))
 	if csvotw != nil {
 		csvotw.Write([]string{
 			fmt.Sprintf("%d", stop.UnixNano()),
@@ -1718,7 +1718,7 @@ func benchPut(c nectar.Client, args []string) {
 				soFar := i - concurrency
 				now := time.Now()
 				elapsed := now.Sub(start)
-				fmt.Printf("\n%.05fs for %d PUTs so far, %.05fs per PUT, or %.05f PUTs per second...", float64(elapsed)/float64(time.Second), soFar, float64(elapsed)/float64(time.Second)/float64(soFar), float64(soFar)/float64(elapsed/time.Second))
+				fmt.Printf("\n%.05fs for %d PUTs so far, %.05f PUTs per second...", float64(elapsed)/float64(time.Second), soFar, float64(soFar)/float64(elapsed/time.Second))
 				if csvotw != nil {
 					csvotw.Write([]string{
 						fmt.Sprintf("%d", now.UnixNano()),
@@ -1738,7 +1738,7 @@ func benchPut(c nectar.Client, args []string) {
 	elapsed := stop.Sub(start)
 	ticker.Stop()
 	fmt.Println()
-	fmt.Printf("%.05fs total time, %.05fs per PUT, or %.05f PUTs per second.\n", float64(elapsed)/float64(time.Second), float64(elapsed)/float64(time.Second)/float64(count), float64(count)/float64(elapsed/time.Second))
+	fmt.Printf("%.05fs total time, %.05f PUTs per second.\n", float64(elapsed)/float64(time.Second), float64(count)/float64(elapsed/time.Second))
 	if csvotw != nil {
 		csvotw.Write([]string{
 			fmt.Sprintf("%d", stop.UnixNano()),
