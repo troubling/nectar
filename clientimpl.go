@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/troubling/nectar/nectarutil"
+	"golang.org/x/net/http2"
 )
 
 // userClient is a Client to be used by end-users.  It knows how to authenticate with auth v1 and v2.
@@ -24,16 +26,31 @@ type userClient struct {
 
 // NewClient creates a new end-user client. It authenticates immediately, and
 // returns the error response if unable to.
-func NewClient(tenant string, username string, password string, apikey string, region string, authurl string, private bool) (Client, *http.Response) {
+func NewClient(tenant string, username string, password string, apikey string, region string, authurl string, private bool, certFile, keyFile string) (Client, *http.Response) {
+	transport := &http.Transport{
+		MaxIdleConnsPerHost: 300,
+		MaxIdleConns:        0,
+		IdleConnTimeout:     5 * time.Second,
+		DisableCompression:  true,
+	}
+	if certFile != "" && keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return nil, nectarutil.ResponseStub(http.StatusBadRequest, fmt.Sprintf("Unable to load cert %s %s: %v", certFile, keyFile, err))
+		}
+		tlsConf := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion: tls.VersionTLS12,
+		}
+		transport.TLSClientConfig = tlsConf
+		if err = http2.ConfigureTransport(transport); err != nil {
+			return nil, nectarutil.ResponseStub(http.StatusBadRequest, fmt.Sprintf("Error setting up http2: %v", err))
+		}
+	}
 	c := &userClient{
 		client: &http.Client{
-			Timeout: 30 * time.Minute,
-			Transport: &http.Transport{
-				MaxIdleConnsPerHost: 300,
-				MaxIdleConns:        0,
-				IdleConnTimeout:     5 * time.Second,
-				DisableCompression:  true,
-			},
+			Timeout:   30 * time.Minute,
+			Transport: transport,
 		},
 		tenant:   tenant,
 		username: username,
