@@ -35,6 +35,8 @@ type CLIInstance struct {
 	globalFlagAuthKey         *string
 	globalFlagAuthPassword    *string
 	globalFlagStorageRegion   *string
+	globalFlagCertFile        *string
+	globalFlagKeyFile         *string
 	GlobalFlagVerbose         *bool
 	globalFlagContinueOnError *bool
 	globalFlagConcurrency     *int
@@ -125,6 +127,8 @@ func CLI(args []string, fatal func(cli *CLIInstance, err error), fatalf func(cli
 	b, _ := strconv.ParseBool(os.Getenv("STORAGE_INTERNAL"))
 	cli.globalFlagInternalStorage = cli.GlobalFlags.Bool("I", b, "Internal storage URL resolution, such as Rackspace ServiceNet. Env: STORAGE_INTERNAL")
 	cli.GlobalFlags.Var(&cli.globalFlagHeaders, "H", "|<name>:[value]| Sets a header to be sent with the request. Useful mostly for PUTs and POSTs, allowing you to set metadata. This option can be specified multiple times for additional headers.")
+	cli.globalFlagCertFile = cli.GlobalFlags.String("cert-file", os.Getenv("CERT_FILE"), "Certificate file to use for setting up https client")
+	cli.globalFlagKeyFile = cli.GlobalFlags.String("key-file", os.Getenv("KEY_FILE"), "Key file to use for setting up https client")
 
 	cli.BenchDeleteFlags = flag.NewFlagSet("bench-delete", flag.ContinueOnError)
 	cli.BenchDeleteFlags.SetOutput(&flagbuf)
@@ -200,7 +204,7 @@ func CLI(args []string, fatal func(cli *CLIInstance, err error), fatalf func(cli
 	if *cli.globalFlagAuthKey == "" && *cli.globalFlagAuthPassword == "" {
 		cli.fatalf(cli, "No Auth Key or Password set; use -K or -P\n")
 	}
-	c, resp := NewClient(*cli.globalFlagAuthTenant, *cli.globalFlagAuthUser, *cli.globalFlagAuthPassword, *cli.globalFlagAuthKey, *cli.globalFlagStorageRegion, *cli.globalFlagAuthURL, *cli.globalFlagInternalStorage)
+	c, resp := NewClient(*cli.globalFlagAuthTenant, *cli.globalFlagAuthUser, *cli.globalFlagAuthPassword, *cli.globalFlagAuthKey, *cli.globalFlagStorageRegion, *cli.globalFlagAuthURL, *cli.globalFlagInternalStorage, *cli.globalFlagCertFile, *cli.globalFlagKeyFile)
 	if resp != nil {
 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()

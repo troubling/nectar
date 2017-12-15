@@ -40,7 +40,7 @@ func NewClient(tenant string, username string, password string, apikey string, r
 		}
 		tlsConf := &tls.Config{
 			Certificates: []tls.Certificate{cert},
-			MinVersion: tls.VersionTLS12,
+			MinVersion:   tls.VersionTLS12,
 		}
 		transport.TLSClientConfig = tlsConf
 		if err = http2.ConfigureTransport(transport); err != nil {
