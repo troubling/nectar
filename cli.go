@@ -107,7 +107,10 @@ func CLI(args []string, fatal func(cli *CLIInstance, err error), fatalf func(cli
 	if fatalf == nil {
 		fatalf = cliFatalf
 	}
-	cli := &CLIInstance{Arg0: args[0], fatal: fatal, fatalf: fatalf}
+	if verbosef == nil {
+		verbosef = cliVerbosef
+	}
+	cli := &CLIInstance{Arg0: args[0], fatal: fatal, fatalf: fatalf, verbosef: verbosef}
 	var flagbuf bytes.Buffer
 
 	cli.GlobalFlags = flag.NewFlagSet(cli.Arg0, flag.ContinueOnError)
