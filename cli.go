@@ -216,6 +216,8 @@ func CLI(args []string, fatal func(cli *CLIInstance, err error), fatalf func(cli
 		args = args[1:]
 	}
 	switch cmd {
+	case "auth":
+		cli.auth(c, args)
 	case "bench-delete":
 		cli.benchDelete(c, args)
 	case "bench-get":
@@ -257,6 +259,10 @@ Tool for accessing a Hummingbird/Swift cluster. Some global options can also be 
 		fmt.Println()
 		fmt.Println(brimtext.Wrap(`
 The following subcommands are available:`, 0, "", ""))
+		fmt.Println("\nauth")
+		fmt.Println(brimtext.Wrap(`
+Displays information retrieved after authentication, such as the Account URL.
+        `, 0, "  ", "  "))
 		fmt.Println("\nbench-delete [options] <container> [object]")
 		fmt.Println(brimtext.Wrap(`
 Benchmark tests DELETEs. By default, 1000 DELETEs are done against the named <container>. If you specify [object] it will be used as a prefix for the object names, otherwise "bench-" will be used. Generally, you would use bench-put to populate the containers and objects, and then use bench-delete with the same options to test the deletions.
@@ -364,6 +370,13 @@ func (cli *CLIInstance) HelpFlags(flags *flag.FlagSet) string {
 	opts := brimtext.NewDefaultAlignOptions()
 	opts.Widths = []int{0, brimtext.GetTTYWidth() - firstWidth - 2}
 	return brimtext.Align(data, opts)
+}
+
+func (cli *CLIInstance) auth(c Client, args []string) {
+	fmt.Println("Account URL:", c.GetURL())
+	if ct, ok := c.(ClientToken); ok {
+		fmt.Println("Token:", ct.GetToken())
+	}
 }
 
 func (cli *CLIInstance) benchDelete(c Client, args []string) {

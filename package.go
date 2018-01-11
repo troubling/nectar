@@ -49,3 +49,10 @@ type ObjectRecord struct {
 	ContentType  string `json:"content_type"`
 	Subdir       string `json:"subdir"`
 }
+
+// ClientToken is an extension to the Client interface allowing the retrieval
+// of the usually internal authentication token, usually for debugging
+// purposes.
+type ClientToken interface {
+	GetToken() string
+}
