@@ -117,6 +117,10 @@ func (c *userClient) GetURL() string {
 	return c.ServiceURL
 }
 
+func (c *userClient) GetToken() string {
+	return c.AuthToken
+}
+
 func (c *userClient) PutAccount(headers map[string]string) *http.Response {
 	return c.doRequest("PUT", "", nil, headers)
 }
