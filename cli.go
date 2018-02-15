@@ -1830,6 +1830,7 @@ func (cli *CLIInstance) delet(c Client, args []string) {
 	} else {
 		resp = c.DeleteAccount(cli.globalFlagHeaders.Headers())
 	}
+	cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 	if resp.StatusCode/100 != 2 {
 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -1852,6 +1853,7 @@ func (cli *CLIInstance) get(c Client, args []string) {
 		} else {
 			resp = c.GetAccountRaw(*cli.getFlagMarker, *cli.getFlagEndMarker, *cli.getFlagLimit, *cli.getFlagPrefix, *cli.getFlagDelimiter, *cli.getFlagReverse, cli.globalFlagHeaders.Headers())
 		}
+		cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 		if resp.StatusCode/100 != 2 {
 			bodyBytes, _ := ioutil.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -1880,6 +1882,7 @@ func (cli *CLIInstance) get(c Client, args []string) {
 	}
 	if container != "" {
 		entries, resp := c.GetContainer(container, *cli.getFlagMarker, *cli.getFlagEndMarker, *cli.getFlagLimit, *cli.getFlagPrefix, *cli.getFlagDelimiter, *cli.getFlagReverse, cli.globalFlagHeaders.Headers())
+		cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 		if resp.StatusCode/100 != 2 {
 			bodyBytes, _ := ioutil.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -1908,6 +1911,7 @@ func (cli *CLIInstance) get(c Client, args []string) {
 		return
 	}
 	entries, resp := c.GetAccount(*cli.getFlagMarker, *cli.getFlagEndMarker, *cli.getFlagLimit, *cli.getFlagPrefix, *cli.getFlagDelimiter, *cli.getFlagReverse, cli.globalFlagHeaders.Headers())
+	cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 	if resp.StatusCode/100 != 2 {
 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -1938,6 +1942,7 @@ func (cli *CLIInstance) head(c Client, args []string) {
 	} else {
 		resp = c.HeadAccount(cli.globalFlagHeaders.Headers())
 	}
+	cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 	bodyBytes, _ := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -1970,6 +1975,7 @@ func (cli *CLIInstance) put(c Client, args []string) {
 	} else {
 		resp = c.PutAccount(cli.globalFlagHeaders.Headers())
 	}
+	cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 	if resp.StatusCode/100 != 2 {
 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -1988,6 +1994,7 @@ func (cli *CLIInstance) post(c Client, args []string) {
 	} else {
 		resp = c.PostAccount(cli.globalFlagHeaders.Headers())
 	}
+	cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 	if resp.StatusCode/100 != 2 {
 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -2011,6 +2018,7 @@ func (cli *CLIInstance) upload(c Client, args []string) {
 	}
 	cli.verbosef(cli, "Ensuring container %q exists.\n", container)
 	resp := c.PutContainer(container, cli.globalFlagHeaders.Headers())
+	cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 	if resp.StatusCode/100 != 2 {
 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -2042,6 +2050,7 @@ func (cli *CLIInstance) upload(c Client, args []string) {
 					}
 				}
 				resp := c.PutObject(container, object+path, cli.globalFlagHeaders.Headers(), f)
+				cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 				if resp.StatusCode/100 != 2 {
 					bodyBytes, _ := ioutil.ReadAll(resp.Body)
 					resp.Body.Close()
@@ -2118,6 +2127,7 @@ func (cli *CLIInstance) download(c Client, args []string) {
 				}
 				if task.object == "" {
 					entries, resp := c.GetContainer(task.container, "", "", 0, "", "", false, cli.globalFlagHeaders.Headers())
+					cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 					if resp.StatusCode/100 != 2 {
 						bodyBytes, _ := ioutil.ReadAll(resp.Body)
 						resp.Body.Close()
@@ -2163,6 +2173,7 @@ func (cli *CLIInstance) download(c Client, args []string) {
 					}
 				}
 				resp := c.GetObject(task.container, task.object, cli.globalFlagHeaders.Headers())
+				cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 				if resp.StatusCode/100 != 2 {
 					bodyBytes, _ := ioutil.ReadAll(resp.Body)
 					resp.Body.Close()
@@ -2223,6 +2234,7 @@ func (cli *CLIInstance) download(c Client, args []string) {
 			cli.fatalf(cli, "Cannot download an account to a single file: %s\n", destpath)
 		}
 		entries, resp := c.GetAccount("", "", 0, "", "", false, cli.globalFlagHeaders.Headers())
+		cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
 		if resp.StatusCode/100 != 2 {
 			bodyBytes, _ := ioutil.ReadAll(resp.Body)
 			resp.Body.Close()
