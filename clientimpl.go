@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"strconv"
 	"strings"
@@ -465,14 +466,18 @@ func (c *userClient) authenticatev3() *http.Response {
 	if resp.StatusCode/100 != 2 {
 		return resp
 	}
-	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return nectarutil.ResponseStub(http.StatusInternalServerError, err.Error()+"\n\n"+string(body))
+	}
 	c.AuthToken = resp.Header.Get("X-Subject-Token")
 	if c.AuthToken == "" {
 		return nectarutil.ResponseStub(http.StatusInternalServerError, "No X-Subject-Token in response.")
 	}
 	var authResponse keystoneResponseV3
-	if err := json.NewDecoder(resp.Body).Decode(&authResponse); err != nil {
-		return nectarutil.ResponseStub(http.StatusInternalServerError, err.Error())
+	if err := json.Unmarshal(body, &authResponse); err != nil {
+		return nectarutil.ResponseStub(http.StatusInternalServerError, err.Error()+"\n\n"+string(body))
 	}
 	intrfc := "public"
 	if c.private {
@@ -483,12 +488,12 @@ func (c *userClient) authenticatev3() *http.Response {
 			for _, e := range s.Endpoints {
 				if ((e.Region == c.region || c.region == "") && e.Interface == intrfc) || len(s.Endpoints) == 1 {
 					c.ServiceURL = e.URL
-					return nectarutil.ResponseStub(http.StatusOK, "")
+					return nectarutil.ResponseStub(http.StatusOK, string(body))
 				}
 			}
 		}
 	}
-	return nectarutil.ResponseStub(http.StatusInternalServerError, "Didn't find endpoint")
+	return nectarutil.ResponseStub(http.StatusInternalServerError, "Didn't find endpoint\n\n"+string(body))
 }
 
 func (c *userClient) authenticate() *http.Response {
