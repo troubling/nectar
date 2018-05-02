@@ -507,5 +507,9 @@ func (c *userClient) authenticate() *http.Response {
 			resp = c.authenticatev1()
 		}
 	}
+	resp2 := c.HeadAccount(nil)
+	if resp2.StatusCode/100 != 200 {
+		return resp2
+	}
 	return resp
 }
