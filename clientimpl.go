@@ -451,7 +451,7 @@ func (c *userClient) authenticatev3() *http.Response {
 		creds.Auth.Identity.Password.User.Password = c.password
 		authReq, err = json.Marshal(creds)
 	} else if c.apikey != "" {
-		panic("v3 by api key not implemented yet")
+		panic("v3 by api key not implemented yet: please use password instead")
 	} else {
 		return nectarutil.ResponseStub(http.StatusInternalServerError, "Couldn't figure out what credentials to use.")
 	}
