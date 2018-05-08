@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"strconv"
 	"strings"
@@ -509,7 +510,9 @@ func (c *userClient) authenticate() *http.Response {
 	}
 	resp2 := c.HeadAccount(nil)
 	if resp2.StatusCode/100 != 200 {
-		return resp2
+		bodyBytes, _ := ioutil.ReadAll(resp2.Body)
+		resp2.Body.Close()
+		return nectarutil.ResponseStub(resp2.StatusCode, "Error response from HEAD on account:\r\n\r\n"+string(bodyBytes))
 	}
 	return resp
 }
