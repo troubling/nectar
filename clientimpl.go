@@ -508,9 +508,9 @@ func (c *userClient) authenticate() *http.Response {
 			resp = c.authenticatev1()
 		}
 	}
-	if resp.StatusCode/100 == 200 {
+	if resp.StatusCode/100 == 2 {
 		resp2 := c.HeadAccount(nil)
-		if resp2.StatusCode/100 != 200 {
+		if resp2.StatusCode/100 != 2 {
 			bodyBytes, _ := ioutil.ReadAll(resp2.Body)
 			resp2.Body.Close()
 			return nectarutil.ResponseStub(resp2.StatusCode, "Error response from HEAD on account "+c.ServiceURL+" :\r\n\r\n"+string(bodyBytes))
