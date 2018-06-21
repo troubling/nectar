@@ -555,7 +555,7 @@ func (c *userClient) authenticate() *http.Response {
 		if resp2.StatusCode/100 != 2 {
 			bodyBytes, _ := ioutil.ReadAll(resp2.Body)
 			resp2.Body.Close()
-			return nectarutil.ResponseStub(resp2.StatusCode, "Error response from HEAD on account "+fmt.Sprintf("%v", c.ServiceURLs)+" :\r\n\r\n"+string(bodyBytes))
+			return nectarutil.ResponseStub(resp2.StatusCode, fmt.Sprintf("Error response from HEAD on account %v :\r\n\r\n %s", c.ServiceURLs, bodyBytes))
 		}
 	}
 	return resp
