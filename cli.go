@@ -2039,48 +2039,36 @@ func (cli *CLIInstance) upload(c Client, args []string) {
 		cli.fatalf(cli, "PUT %s - %d %s - %s\n", container, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
 	}
 	resp.Body.Close()
-	concurrency := *cli.globalFlagConcurrency
-	if concurrency < 1 {
-		concurrency = 1
-	}
-	uploadChan := make(chan string, concurrency-1)
-	wg := sync.WaitGroup{}
-	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func() {
-			for {
-				path := <-uploadChan
-				if path == "" {
-					break
-				}
-				cli.verbosef(cli, "Uploading %q to %q %q.\n", path, container, object+path)
-				f, err := os.Open(path)
-				if err != nil {
-					if *cli.globalFlagContinueOnError {
-						fmt.Fprintf(os.Stderr, "Cannot open %s while attempting to upload to %s/%s: %s\n", path, container, object+path, err)
-						continue
-					} else {
-						cli.fatalf(cli, "Cannot open %s while attempting to upload to %s/%s: %s\n", path, container, object+path, err)
-					}
-				}
-				resp := c.PutObject(container, object+path, cli.globalFlagHeaders.Headers(), f)
-				cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
-				if resp.StatusCode/100 != 2 {
-					bodyBytes, _ := ioutil.ReadAll(resp.Body)
-					resp.Body.Close()
-					f.Close()
-					if *cli.globalFlagContinueOnError {
-						fmt.Fprintf(os.Stderr, "PUT %s/%s - %d %s - %s\n", container, object+path, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
-						continue
-					} else {
-						cli.fatalf(cli, "PUT %s/%s - %d %s - %s\n", container, object+path, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
-					}
-				}
-				resp.Body.Close()
-				f.Close()
+	uploadfn := func(path string, appendPath bool) {
+		opath := object
+		if appendPath {
+			opath += path
+		}
+		cli.verbosef(cli, "Uploading %q to %q %q.\n", path, container, opath)
+		f, err := os.Open(path)
+		if err != nil {
+			if *cli.globalFlagContinueOnError {
+				fmt.Fprintf(os.Stderr, "Cannot open %s while attempting to upload to %s/%s: %s\n", path, container, opath, err)
+				return
+			} else {
+				cli.fatalf(cli, "Cannot open %s while attempting to upload to %s/%s: %s\n", path, container, opath, err)
 			}
-			wg.Done()
-		}()
+		}
+		resp := c.PutObject(container, opath, cli.globalFlagHeaders.Headers(), f)
+		cli.verbosef(cli, "X-Trans-Id: %q\n", resp.Header.Get("X-Trans-Id"))
+		if resp.StatusCode/100 != 2 {
+			bodyBytes, _ := ioutil.ReadAll(resp.Body)
+			resp.Body.Close()
+			f.Close()
+			if *cli.globalFlagContinueOnError {
+				fmt.Fprintf(os.Stderr, "PUT %s/%s - %d %s - %s\n", container, opath, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+				return
+			} else {
+				cli.fatalf(cli, "PUT %s/%s - %d %s - %s\n", container, opath, resp.StatusCode, http.StatusText(resp.StatusCode), string(bodyBytes))
+			}
+		}
+		resp.Body.Close()
+		f.Close()
 	}
 	fi, err := os.Stat(sourcepath)
 	if err != nil {
@@ -2088,8 +2076,27 @@ func (cli *CLIInstance) upload(c Client, args []string) {
 	}
 	// This "if" is so a single file upload that happens to be a symlink will work.
 	if fi.Mode().IsRegular() {
-		uploadChan <- sourcepath
+		uploadfn(sourcepath, false)
 	} else {
+		concurrency := *cli.globalFlagConcurrency
+		if concurrency < 1 {
+			concurrency = 1
+		}
+		uploadChan := make(chan string, concurrency-1)
+		wg := sync.WaitGroup{}
+		wg.Add(concurrency)
+		for i := 0; i < concurrency; i++ {
+			go func() {
+				for {
+					path := <-uploadChan
+					if path == "" {
+						break
+					}
+					uploadfn(path, true)
+				}
+				wg.Done()
+			}()
+		}
 		// This "if" is to handle when the user-given path is a symlink to a directory; we normally want to skip symlinks, but not in this initial case.
 		if !strings.HasSuffix(sourcepath, string(os.PathSeparator)) {
 			sourcepath += string(os.PathSeparator)
@@ -2101,9 +2108,9 @@ func (cli *CLIInstance) upload(c Client, args []string) {
 			uploadChan <- path
 			return nil
 		})
+		close(uploadChan)
+		wg.Wait()
 	}
-	close(uploadChan)
-	wg.Wait()
 }
 
 func (cli *CLIInstance) download(c Client, args []string) {
