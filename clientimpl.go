@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,15 +18,16 @@ import (
 // userClient is a Client to be used by end-users.  It knows how to authenticate with auth v1 and v2.
 type userClient struct {
 	client                                              *http.Client
-	ServiceURL                                          string
+	ServiceURLs                                         []string
 	AuthToken                                           string
 	tenant, username, password, apikey, region, authurl string
 	private                                             bool
+	overrideURLs                                        []string
 }
 
 // NewClient creates a new end-user client. It authenticates immediately, and
 // returns the error response if unable to.
-func NewClient(tenant string, username string, password string, apikey string, region string, authurl string, private bool) (Client, *http.Response) {
+func NewClient(tenant string, username string, password string, apikey string, region string, authurl string, private bool, overrideURLs []string) (Client, *http.Response) {
 	c := &userClient{
 		client: &http.Client{
 			Timeout: 30 * time.Minute,
@@ -43,6 +45,11 @@ func NewClient(tenant string, username string, password string, apikey string, r
 		region:   region,
 		authurl:  authurl,
 		private:  private,
+	}
+	for _, u := range overrideURLs {
+		if u != "" {
+			c.overrideURLs = append(c.overrideURLs, u)
+		}
 	}
 	if aResp := c.authenticate(); aResp.StatusCode/100 != 2 {
 		return nil, aResp
@@ -86,7 +93,8 @@ func NewInsecureClient(tenant string, username string, password string, apikey s
 var _ Client = &userClient{}
 
 func (c *userClient) authedRequest(method string, path string, body io.Reader, headers map[string]string) (*http.Request, error) {
-	req, err := http.NewRequest(method, c.ServiceURL+path, body)
+	surl := c.ServiceURLs[rand.Intn(len(c.ServiceURLs))]
+	req, err := http.NewRequest(method, surl+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +123,14 @@ func (c *userClient) doRequest(method string, path string, body io.Reader, heade
 }
 
 func (c *userClient) GetURL() string {
-	return c.ServiceURL
+	if len(c.ServiceURLs) < 1 {
+		return ""
+	}
+	return c.ServiceURLs[0]
+}
+
+func (c *userClient) GetURLs() []string {
+	return c.ServiceURLs
 }
 
 func (c *userClient) GetToken() string {
@@ -292,11 +307,21 @@ func (c *userClient) authenticatev1() *http.Response {
 	if resp.StatusCode/100 != 2 {
 		return resp
 	}
-	c.ServiceURL = resp.Header.Get("X-Storage-Url")
 	c.AuthToken = resp.Header.Get("X-Auth-Token")
-	if c.ServiceURL == "" || c.AuthToken == "" {
+	if c.AuthToken == "" {
 		resp.Body.Close()
-		return nectarutil.ResponseStub(http.StatusInternalServerError, "Response did not have X-Storage-Url or X-Auth-Token headers.")
+		return nectarutil.ResponseStub(http.StatusInternalServerError, "Response did not have X-Auth-Token header.")
+	}
+	if len(c.overrideURLs) > 0 {
+		c.ServiceURLs = make([]string, len(c.overrideURLs))
+		copy(c.ServiceURLs, c.overrideURLs)
+	} else {
+		surl := resp.Header.Get("X-Storage-Url")
+		if surl == "" {
+			resp.Body.Close()
+			return nectarutil.ResponseStub(http.StatusInternalServerError, "Response did not have X-Storage-Url header.")
+		}
+		c.ServiceURLs = []string{surl}
 	}
 	return resp
 }
@@ -387,21 +412,29 @@ func (c *userClient) authenticatev2() *http.Response {
 	if region == "" {
 		region = authResponse.Access.User.RaxDefaultRegion
 	}
-	for _, s := range authResponse.Access.ServiceCatalog {
-		if s.Type == "object-store" {
-			for _, e := range s.Endpoints {
-				if e.Region == region || region == "" || len(s.Endpoints) == 1 {
-					if c.private {
-						c.ServiceURL = e.InternalURL
-					} else {
-						c.ServiceURL = e.PublicURL
+	if len(c.overrideURLs) > 0 {
+		c.ServiceURLs = make([]string, len(c.overrideURLs))
+		copy(c.ServiceURLs, c.overrideURLs)
+	} else {
+		c.ServiceURLs = nil
+		for _, s := range authResponse.Access.ServiceCatalog {
+			if s.Type == "object-store" {
+				for _, e := range s.Endpoints {
+					if e.Region == region || region == "" || len(s.Endpoints) == 1 {
+						if c.private {
+							c.ServiceURLs = append(c.ServiceURLs, e.InternalURL)
+						} else {
+							c.ServiceURLs = append(c.ServiceURLs, e.PublicURL)
+						}
 					}
-					return nectarutil.ResponseStub(http.StatusOK, "")
 				}
 			}
 		}
 	}
-	return nectarutil.ResponseStub(http.StatusInternalServerError, "Didn't find endpoint")
+	if len(c.ServiceURLs) < 1 {
+		return nectarutil.ResponseStub(http.StatusInternalServerError, "Didn't find endpoint")
+	}
+	return nectarutil.ResponseStub(http.StatusOK, "")
 }
 
 type keystoneRequestV3 struct {
@@ -479,17 +512,25 @@ func (c *userClient) authenticatev3() *http.Response {
 	if c.private {
 		intrfc = "private"
 	}
-	for _, s := range authResponse.Token.Catalog {
-		if s.Type == "object-store" {
-			for _, e := range s.Endpoints {
-				if ((e.Region == c.region || c.region == "") && e.Interface == intrfc) || len(s.Endpoints) == 1 {
-					c.ServiceURL = e.URL
-					return nectarutil.ResponseStub(http.StatusOK, "")
+	if len(c.overrideURLs) > 0 {
+		c.ServiceURLs = make([]string, len(c.overrideURLs))
+		copy(c.ServiceURLs, c.overrideURLs)
+	} else {
+		c.ServiceURLs = nil
+		for _, s := range authResponse.Token.Catalog {
+			if s.Type == "object-store" {
+				for _, e := range s.Endpoints {
+					if ((e.Region == c.region || c.region == "") && e.Interface == intrfc) || len(s.Endpoints) == 1 {
+						c.ServiceURLs = append(c.ServiceURLs, e.URL)
+					}
 				}
 			}
 		}
 	}
-	return nectarutil.ResponseStub(http.StatusInternalServerError, "Didn't find endpoint")
+	if len(c.ServiceURLs) < 1 {
+		return nectarutil.ResponseStub(http.StatusInternalServerError, "Didn't find endpoint")
+	}
+	return nectarutil.ResponseStub(http.StatusOK, "")
 }
 
 func (c *userClient) authenticate() *http.Response {

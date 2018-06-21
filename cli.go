@@ -34,6 +34,7 @@ type CLIInstance struct {
 	globalFlagAuthUser        *string
 	globalFlagAuthKey         *string
 	globalFlagAuthPassword    *string
+	globalFlagOverrideURLs    *string
 	globalFlagStorageRegion   *string
 	GlobalFlagVerbose         *bool
 	globalFlagContinueOnError *bool
@@ -120,6 +121,7 @@ func CLI(args []string, fatal func(cli *CLIInstance, err error), fatalf func(cli
 	cli.globalFlagAuthUser = cli.GlobalFlags.String("U", os.Getenv("AUTH_USER"), "|<user>| User name for auth system, example: tester - Some auth systems allow tenant:user format here, example: test:tester - Env: AUTH_USER")
 	cli.globalFlagAuthKey = cli.GlobalFlags.String("K", os.Getenv("AUTH_KEY"), "|<key>| Key for auth system, example: testing - Some auth systems use passwords instead, see -P - Env: AUTH_KEY")
 	cli.globalFlagAuthPassword = cli.GlobalFlags.String("P", os.Getenv("AUTH_PASSWORD"), "|<password>| Password for auth system, example: testing - Some auth system use keys instead, see -K - Env: AUTH_PASSWORD")
+	cli.globalFlagOverrideURLs = cli.GlobalFlags.String("O", os.Getenv("OVERRIDE_URLS"), "|<url> [url] ...| Override URLs for service endpoint(s); the service endpoint given by auth will be ignored - Env: OVERRIDE_URLS")
 	cli.globalFlagStorageRegion = cli.GlobalFlags.String("R", os.Getenv("STORAGE_REGION"), "|<region>| Storage region to use if set, otherwise uses the default. Env: STORAGE_REGION")
 	cli.GlobalFlagVerbose = cli.GlobalFlags.Bool("v", false, "Will activate verbose output.")
 	cli.globalFlagContinueOnError = cli.GlobalFlags.Bool("continue-on-error", false, "When possible, continue with additional operations even if one or more fail.")
@@ -203,7 +205,7 @@ func CLI(args []string, fatal func(cli *CLIInstance, err error), fatalf func(cli
 	if *cli.globalFlagAuthKey == "" && *cli.globalFlagAuthPassword == "" {
 		cli.fatalf(cli, "No Auth Key or Password set; use -K or -P\n")
 	}
-	c, resp := NewClient(*cli.globalFlagAuthTenant, *cli.globalFlagAuthUser, *cli.globalFlagAuthPassword, *cli.globalFlagAuthKey, *cli.globalFlagStorageRegion, *cli.globalFlagAuthURL, *cli.globalFlagInternalStorage)
+	c, resp := NewClient(*cli.globalFlagAuthTenant, *cli.globalFlagAuthUser, *cli.globalFlagAuthPassword, *cli.globalFlagAuthKey, *cli.globalFlagStorageRegion, *cli.globalFlagAuthURL, *cli.globalFlagInternalStorage, strings.Split(*cli.globalFlagOverrideURLs, " "))
 	if resp != nil {
 		bodyBytes, _ := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -373,7 +375,19 @@ func (cli *CLIInstance) HelpFlags(flags *flag.FlagSet) string {
 }
 
 func (cli *CLIInstance) auth(c Client, args []string) {
-	fmt.Println("Account URL:", c.GetURL())
+	uc, ok := c.(*userClient)
+	if ok {
+		surls := uc.GetURLs()
+		if len(surls) == 0 {
+			fmt.Println("Account URL:")
+		} else if len(surls) == 1 {
+			fmt.Println("Account URL:", surls[0])
+		} else {
+			fmt.Println("Account URLs:", strings.Join(surls, " "))
+		}
+	} else {
+		fmt.Println("Account URL:", c.GetURL())
+	}
 	if ct, ok := c.(ClientToken); ok {
 		fmt.Println("Token:", ct.GetToken())
 	}
