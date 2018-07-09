@@ -1233,7 +1233,7 @@ func (cli *CLIInstance) benchMixed(c Client, args []string) {
 		}()
 		wg.Add(1)
 		go func() {
-			rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+			rnd := NewRand(time.Now().UnixNano())
 			var start time.Time
 			op := put
 			var i int
@@ -1731,7 +1731,7 @@ func (cli *CLIInstance) benchPut(c Client, args []string) {
 	wg.Add(concurrency)
 	for x := 0; x < concurrency; x++ {
 		go func() {
-			rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+			rnd := NewRand(time.Now().UnixNano())
 			var start time.Time
 			for {
 				i := <-benchChan
@@ -2312,4 +2312,37 @@ func (slf *stringListFlag) Headers() map[string]string {
 		}
 	}
 	return headers
+}
+
+// lockedSource allows a random number generator to be used by multiple goroutines concurrently.
+// The code is very similar to math/rand.lockedSource.
+type lockedSource struct {
+	mut sync.Mutex
+	src rand.Source64
+}
+
+// NewRand returns a rand.Rand that is threadsafe.
+func NewRand(seed int64) *rand.Rand {
+	return rand.New(&lockedSource{src: rand.NewSource(seed).(rand.Source64)})
+}
+
+func (r *lockedSource) Int63() (n int64) {
+	r.mut.Lock()
+	n = r.src.Int63()
+	r.mut.Unlock()
+	return
+}
+
+func (r *lockedSource) Uint64() (n uint64) {
+	r.mut.Lock()
+	n = r.src.Uint64()
+	r.mut.Unlock()
+	return
+}
+
+// Seed implements Seed() of Source
+func (r *lockedSource) Seed(seed int64) {
+	r.mut.Lock()
+	r.src.Seed(seed)
+	r.mut.Unlock()
 }
