@@ -24,6 +24,7 @@ type userClient struct {
 	tenant, username, password, apikey, region, authurl string
 	private                                             bool
 	overrideURLs                                        []string
+	userAgent                                           string
 }
 
 // NewClient creates a new end-user client. It authenticates immediately, and
@@ -39,13 +40,14 @@ func NewClient(tenant string, username string, password string, apikey string, r
 				DisableCompression:  true,
 			},
 		},
-		tenant:   tenant,
-		username: username,
-		password: password,
-		apikey:   apikey,
-		region:   region,
-		authurl:  authurl,
-		private:  private,
+		tenant:    tenant,
+		username:  username,
+		password:  password,
+		apikey:    apikey,
+		region:    region,
+		authurl:   authurl,
+		private:   private,
+		userAgent: "Nectar",
 	}
 	for _, u := range overrideURLs {
 		if u != "" {
@@ -75,13 +77,14 @@ func NewInsecureClient(tenant string, username string, password string, apikey s
 				DisableCompression:  true,
 			},
 		},
-		tenant:   tenant,
-		username: username,
-		password: password,
-		apikey:   apikey,
-		region:   region,
-		authurl:  authurl,
-		private:  private,
+		tenant:    tenant,
+		username:  username,
+		password:  password,
+		apikey:    apikey,
+		region:    region,
+		authurl:   authurl,
+		private:   private,
+		userAgent: "Nectar",
 	}
 	if aResp := c.authenticate(); aResp.StatusCode/100 != 2 {
 		return nil, aResp
@@ -100,7 +103,7 @@ func (c *userClient) authedRequest(method string, path string, body io.Reader, h
 		return nil, err
 	}
 	req.Header.Set("X-Auth-Token", c.AuthToken)
-	req.Header.Set("User-Agent", "Hummingbird Client")
+	req.Header.Set("User-Agent", c.userAgent)
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -559,4 +562,8 @@ func (c *userClient) authenticate() *http.Response {
 		}
 	}
 	return resp
+}
+
+func (c *userClient) SetUserAgent(v string) {
+	c.userAgent = v
 }

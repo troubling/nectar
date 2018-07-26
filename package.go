@@ -31,6 +31,7 @@ type Client interface {
 	HeadObject(container string, obj string, headers map[string]string) *http.Response
 	DeleteObject(container string, obj string, headers map[string]string) *http.Response
 	Raw(method, urlAfterAccount string, headers map[string]string, body io.Reader) *http.Response
+	SetUserAgent(string)
 }
 
 // ContainerRecord is an entry in an account listing.
